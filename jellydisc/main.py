@@ -476,17 +476,17 @@ class JellyDiscApp(_BaseClass):
             )
             theme_url = self.jellyfin_client.get_theme_song_url(self.selected_series.id)
         
-        # Update backdrop status
+        # Update backdrop status - URL is always available, download may fail
         if backdrop_url:
             self.backdrop_status_label.configure(
-                text="✓ Using Jellyfin backdrop",
-                text_color="green"
+                text="Using Jellyfin backdrop (if available)",
+                text_color="gray"
             )
             # Store the URL for later download
             self._jellyfin_backdrop_url = backdrop_url
         else:
             self.backdrop_status_label.configure(
-                text="⚠ No backdrop found - upload one or use a solid color",
+                text="⚠ No backdrop - upload one or use a solid color",
                 text_color="orange"
             )
             self._jellyfin_backdrop_url = None
@@ -494,8 +494,8 @@ class JellyDiscApp(_BaseClass):
         # Update theme music status
         if theme_url:
             self.music_status_label.configure(
-                text="✓ Using Jellyfin theme song",
-                text_color="green"
+                text="Using Jellyfin theme song (if available)",
+                text_color="gray"
             )
             self._jellyfin_theme_url = theme_url
         else:

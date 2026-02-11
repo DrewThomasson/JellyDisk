@@ -104,9 +104,6 @@ class JellyfinClient:
         self.user_id: Optional[str] = None
         self.session = requests.Session()
         
-        # Cache for image availability checks to avoid repeated HEAD requests
-        self._image_cache: dict[str, Optional[str]] = {}
-        
         # Set default headers
         self._update_auth_header()
     
@@ -348,9 +345,13 @@ class JellyfinClient:
         
         return season
     
-    def _get_image_url(self, item_id: str, image_type: str, max_width: int = 720) -> Optional[str]:
+    def _get_image_url(self, item_id: str, image_type: str, max_width: int = 720) -> str:
         """
-        Construct URL for an item's image if it exists.
+        Construct URL for an item's image.
+        
+        Note: This method does not validate if the image exists. The caller
+        should handle 404 errors gracefully (e.g., download_image returns None
+        on failure).
         
         Args:
             item_id: ID of the item
@@ -358,28 +359,9 @@ class JellyfinClient:
             max_width: Maximum width for the image
             
         Returns:
-            Full URL to the image, or None if the image doesn't exist
+            Full URL to the image
         """
-        # Create cache key for this image request
-        cache_key = f"{item_id}_{image_type}_{max_width}"
-        
-        # Return cached result if available
-        if cache_key in self._image_cache:
-            return self._image_cache[cache_key]
-        
-        # Check if the image exists by making a HEAD request
-        url = f"{self.server_url}/Items/{item_id}/Images/{image_type}?maxWidth={max_width}"
-        try:
-            response = self.session.head(url, timeout=5)
-            if response.status_code == 200:
-                self._image_cache[cache_key] = url
-                return url
-            self._image_cache[cache_key] = None
-            return None
-        except requests.exceptions.RequestException:
-            # On any network error, return None instead of crashing
-            self._image_cache[cache_key] = None
-            return None
+        return f"{self.server_url}/Items/{item_id}/Images/{image_type}?maxWidth={max_width}"
     
     def download_image(self, url: str, save_path: Path) -> Optional[Path]:
         """
