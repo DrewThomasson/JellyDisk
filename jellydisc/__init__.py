@@ -19,9 +19,23 @@ from .transcoder import (
     DiscPlan,
     check_dependencies,
 )
+from .menu_builder import (
+    MenuBuilder,
+    MenuConfig,
+    MenuStyle,
+    EpisodeThumbnail,
+    check_menu_dependencies,
+)
+from .burner import (
+    Burner,
+    DiscInfo,
+    check_burner_dependencies,
+)
 
 __all__ = [
+    # Jellyfin Client
     "JellyfinClient",
+    # Transcoder
     "Transcoder",
     "TranscodeJob",
     "VideoSettings",
@@ -29,4 +43,14 @@ __all__ = [
     "VideoStandard",
     "DiscPlan",
     "check_dependencies",
+    # Menu Builder
+    "MenuBuilder",
+    "MenuConfig",
+    "MenuStyle",
+    "EpisodeThumbnail",
+    "check_menu_dependencies",
+    # Burner
+    "Burner",
+    "DiscInfo",
+    "check_burner_dependencies",
 ]

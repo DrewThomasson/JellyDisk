@@ -1,0 +1,999 @@
+#!/usr/bin/env python3
+"""
+JellyDisc - Main Application
+
+A cross-platform desktop application that connects to a Jellyfin server,
+downloads TV show seasons, and authors commercial-grade DVD ISOs with
+interactive menus, metadata, and subtitles.
+"""
+
+import logging
+import os
+import sys
+import threading
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional, Callable
+
+try:
+    import customtkinter as ctk
+    from PIL import Image, ImageTk
+    GUI_AVAILABLE = True
+except ImportError as e:
+    GUI_AVAILABLE = False
+    GUI_ERROR = str(e)
+
+from .jellyfin_client import (
+    JellyfinClient, 
+    JellyfinClientError, 
+    AuthenticationError,
+    JellyfinConnectionError,
+    Series,
+    Season,
+    Episode
+)
+from .transcoder import (
+    Transcoder,
+    TranscodeJob,
+    VideoSettings,
+    VideoStandard,
+    DiscPlan,
+    check_dependencies as check_transcoder_deps
+)
+from .menu_builder import (
+    MenuBuilder,
+    MenuConfig,
+    MenuStyle,
+    EpisodeThumbnail
+)
+from .burner import (
+    Burner,
+    check_burner_dependencies
+)
+
+logger = logging.getLogger(__name__)
+
+
+def sanitize_filename(name: str, max_length: int = 200) -> str:
+    """
+    Sanitize a string for use as a filename.
+    
+    Args:
+        name: Original filename
+        max_length: Maximum length for the filename
+        
+    Returns:
+        Safe filename string
+    """
+    # Keep only alphanumeric chars, spaces, dots, underscores, and hyphens
+    safe = "".join(c for c in name if c.isalnum() or c in "._- ")
+    # Replace multiple spaces with single space
+    safe = " ".join(safe.split())
+    # Truncate if needed
+    return safe[:max_length].strip()
+
+
+# Configure CustomTkinter (only if available)
+if GUI_AVAILABLE:
+    ctk.set_appearance_mode("dark")
+    ctk.set_default_color_theme("blue")
+    _BaseClass = ctk.CTk
+else:
+    _BaseClass = object
+
+
+@dataclass
+class AppConfig:
+    """Application configuration."""
+    # Working directories
+    assets_dir: Path = Path("assets")
+    staging_dir: Path = Path("staging")
+    output_dir: Path = Path("output")
+    
+    # Authoring settings
+    video_standard: VideoStandard = VideoStandard.NTSC
+    audio_language: str = "English"
+    include_subtitles: bool = True
+    menu_style: MenuStyle = MenuStyle.MODERN
+    
+    # Burn settings
+    burn_speed: int = 4
+
+
+class JellyDiscApp(_BaseClass):
+    """Main application window."""
+    
+    def __init__(self):
+        super().__init__()
+        
+        self.title("JellyDisc - DVD Authoring Suite")
+        self.geometry("1000x700")
+        self.minsize(800, 600)
+        
+        # Application state
+        self.config = AppConfig()
+        self.jellyfin_client: Optional[JellyfinClient] = None
+        self.selected_series: Optional[Series] = None
+        self.selected_season: Optional[Season] = None
+        self.disc_plans: list[DiscPlan] = []
+        
+        # Ensure working directories exist
+        self.config.assets_dir.mkdir(exist_ok=True)
+        self.config.staging_dir.mkdir(exist_ok=True)
+        self.config.output_dir.mkdir(exist_ok=True)
+        
+        # Create UI
+        self._create_ui()
+        
+        # Check dependencies on startup
+        self.after(100, self._check_dependencies)
+    
+    def _create_ui(self):
+        """Create the main UI layout."""
+        # Create tab view
+        self.tabview = ctk.CTkTabview(self)
+        self.tabview.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        # Add tabs
+        self.tab_connect = self.tabview.add("Connect")
+        self.tab_library = self.tabview.add("Library")
+        self.tab_config = self.tabview.add("Authoring")
+        self.tab_burn = self.tabview.add("Burn")
+        
+        # Build each tab
+        self._create_connect_tab()
+        self._create_library_tab()
+        self._create_config_tab()
+        self._create_burn_tab()
+        
+        # Status bar
+        self.status_frame = ctk.CTkFrame(self, height=30)
+        self.status_frame.pack(fill="x", padx=10, pady=(0, 10))
+        
+        self.status_label = ctk.CTkLabel(
+            self.status_frame, 
+            text="Ready. Please connect to your Jellyfin server.",
+            anchor="w"
+        )
+        self.status_label.pack(fill="x", padx=10, pady=5)
+    
+    def _create_connect_tab(self):
+        """Create the Connect tab for Jellyfin login."""
+        frame = ctk.CTkFrame(self.tab_connect)
+        frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # Center content
+        center_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        center_frame.place(relx=0.5, rely=0.5, anchor="center")
+        
+        # Title
+        title = ctk.CTkLabel(
+            center_frame, 
+            text="🎬 JellyDisc", 
+            font=ctk.CTkFont(size=32, weight="bold")
+        )
+        title.pack(pady=(0, 5))
+        
+        subtitle = ctk.CTkLabel(
+            center_frame,
+            text="Connect to your Jellyfin server",
+            font=ctk.CTkFont(size=14),
+            text_color="gray"
+        )
+        subtitle.pack(pady=(0, 30))
+        
+        # Server URL
+        url_label = ctk.CTkLabel(center_frame, text="Server URL:")
+        url_label.pack(anchor="w")
+        
+        self.url_entry = ctk.CTkEntry(center_frame, width=400, placeholder_text="http://localhost:8096")
+        self.url_entry.pack(pady=(5, 15))
+        
+        # Load from environment
+        env_url = os.environ.get("JELLYFIN_URL", "")
+        if env_url:
+            self.url_entry.insert(0, env_url)
+        
+        # Username
+        user_label = ctk.CTkLabel(center_frame, text="Username:")
+        user_label.pack(anchor="w")
+        
+        self.user_entry = ctk.CTkEntry(center_frame, width=400, placeholder_text="admin")
+        self.user_entry.pack(pady=(5, 15))
+        
+        env_user = os.environ.get("JELLYFIN_USER", "")
+        if env_user:
+            self.user_entry.insert(0, env_user)
+        
+        # Password
+        pass_label = ctk.CTkLabel(center_frame, text="Password:")
+        pass_label.pack(anchor="w")
+        
+        self.pass_entry = ctk.CTkEntry(center_frame, width=400, show="•", placeholder_text="password")
+        self.pass_entry.pack(pady=(5, 20))
+        
+        env_pass = os.environ.get("JELLYFIN_PASS", "")
+        if env_pass:
+            self.pass_entry.insert(0, env_pass)
+        
+        # Connect button
+        self.connect_btn = ctk.CTkButton(
+            center_frame,
+            text="Connect",
+            width=200,
+            height=40,
+            command=self._on_connect
+        )
+        self.connect_btn.pack(pady=10)
+        
+        # Connection status
+        self.connect_status = ctk.CTkLabel(
+            center_frame,
+            text="",
+            font=ctk.CTkFont(size=12)
+        )
+        self.connect_status.pack(pady=10)
+    
+    def _create_library_tab(self):
+        """Create the Library tab for browsing TV shows."""
+        # Left panel - Show list
+        left_frame = ctk.CTkFrame(self.tab_library)
+        left_frame.pack(side="left", fill="both", expand=True, padx=(10, 5), pady=10)
+        
+        # Header
+        header = ctk.CTkLabel(
+            left_frame,
+            text="TV Shows",
+            font=ctk.CTkFont(size=18, weight="bold")
+        )
+        header.pack(pady=10)
+        
+        # Show scrollable frame for shows
+        self.shows_frame = ctk.CTkScrollableFrame(left_frame)
+        self.shows_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        self.show_widgets = []  # Store show buttons
+        
+        # Right panel - Season/Episode details
+        right_frame = ctk.CTkFrame(self.tab_library)
+        right_frame.pack(side="right", fill="both", expand=True, padx=(5, 10), pady=10)
+        
+        # Season selection
+        self.season_label = ctk.CTkLabel(
+            right_frame,
+            text="Select a show",
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        self.season_label.pack(pady=10)
+        
+        # Season dropdown
+        self.season_var = ctk.StringVar(value="")
+        self.season_dropdown = ctk.CTkComboBox(
+            right_frame,
+            values=[],
+            variable=self.season_var,
+            command=self._on_season_selected,
+            width=300,
+            state="disabled"
+        )
+        self.season_dropdown.pack(pady=10)
+        
+        # Episode list
+        self.episodes_frame = ctk.CTkScrollableFrame(right_frame)
+        self.episodes_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        # Select button
+        self.select_season_btn = ctk.CTkButton(
+            right_frame,
+            text="Author This Season",
+            command=self._on_author_season,
+            state="disabled"
+        )
+        self.select_season_btn.pack(pady=10)
+    
+    def _create_config_tab(self):
+        """Create the Authoring Config tab."""
+        frame = ctk.CTkFrame(self.tab_config)
+        frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # Title
+        title = ctk.CTkLabel(
+            frame,
+            text="Authoring Configuration",
+            font=ctk.CTkFont(size=20, weight="bold")
+        )
+        title.pack(pady=(0, 20))
+        
+        # Settings grid
+        settings_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        settings_frame.pack(fill="x", pady=10)
+        
+        # Video Standard
+        std_label = ctk.CTkLabel(settings_frame, text="Video Standard:")
+        std_label.grid(row=0, column=0, sticky="e", padx=10, pady=10)
+        
+        self.standard_var = ctk.StringVar(value="NTSC")
+        std_dropdown = ctk.CTkComboBox(
+            settings_frame,
+            values=["NTSC", "PAL"],
+            variable=self.standard_var,
+            width=200
+        )
+        std_dropdown.grid(row=0, column=1, sticky="w", padx=10, pady=10)
+        
+        # Audio Language
+        audio_label = ctk.CTkLabel(settings_frame, text="Audio Language:")
+        audio_label.grid(row=1, column=0, sticky="e", padx=10, pady=10)
+        
+        self.audio_var = ctk.StringVar(value="English")
+        audio_dropdown = ctk.CTkComboBox(
+            settings_frame,
+            values=["English", "Spanish", "French", "German", "Japanese", "Korean", "Chinese"],
+            variable=self.audio_var,
+            width=200
+        )
+        audio_dropdown.grid(row=1, column=1, sticky="w", padx=10, pady=10)
+        
+        # Include Subtitles
+        self.subtitles_var = ctk.BooleanVar(value=True)
+        subtitles_check = ctk.CTkCheckBox(
+            settings_frame,
+            text="Include Subtitles",
+            variable=self.subtitles_var
+        )
+        subtitles_check.grid(row=2, column=1, sticky="w", padx=10, pady=10)
+        
+        # Menu Style
+        style_label = ctk.CTkLabel(settings_frame, text="Menu Style:")
+        style_label.grid(row=3, column=0, sticky="e", padx=10, pady=10)
+        
+        self.style_var = ctk.StringVar(value="Modern")
+        style_dropdown = ctk.CTkComboBox(
+            settings_frame,
+            values=["Modern", "Retro"],
+            variable=self.style_var,
+            width=200
+        )
+        style_dropdown.grid(row=3, column=1, sticky="w", padx=10, pady=10)
+        
+        # Burn Speed
+        speed_label = ctk.CTkLabel(settings_frame, text="Burn Speed:")
+        speed_label.grid(row=4, column=0, sticky="e", padx=10, pady=10)
+        
+        self.speed_var = ctk.StringVar(value="4x")
+        speed_dropdown = ctk.CTkComboBox(
+            settings_frame,
+            values=["1x", "2x", "4x", "8x", "16x"],
+            variable=self.speed_var,
+            width=200
+        )
+        speed_dropdown.grid(row=4, column=1, sticky="w", padx=10, pady=10)
+        
+        # Summary frame
+        self.config_summary = ctk.CTkFrame(frame)
+        self.config_summary.pack(fill="x", pady=20)
+        
+        self.summary_label = ctk.CTkLabel(
+            self.config_summary,
+            text="No season selected. Please select a season from the Library tab.",
+            font=ctk.CTkFont(size=12),
+            text_color="gray"
+        )
+        self.summary_label.pack(pady=20)
+    
+    def _create_burn_tab(self):
+        """Create the Burn tab with progress tracking."""
+        frame = ctk.CTkFrame(self.tab_burn)
+        frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # Title
+        title = ctk.CTkLabel(
+            frame,
+            text="DVD Authoring & Burning",
+            font=ctk.CTkFont(size=20, weight="bold")
+        )
+        title.pack(pady=(0, 20))
+        
+        # Disc info
+        self.disc_info_frame = ctk.CTkFrame(frame)
+        self.disc_info_frame.pack(fill="x", pady=10)
+        
+        self.disc_info_label = ctk.CTkLabel(
+            self.disc_info_frame,
+            text="No project loaded",
+            font=ctk.CTkFont(size=14)
+        )
+        self.disc_info_label.pack(pady=15)
+        
+        # Progress section
+        progress_frame = ctk.CTkFrame(frame)
+        progress_frame.pack(fill="x", pady=20)
+        
+        # Overall progress
+        overall_label = ctk.CTkLabel(progress_frame, text="Overall Progress:")
+        overall_label.pack(anchor="w", padx=10, pady=(10, 5))
+        
+        self.overall_progress = ctk.CTkProgressBar(progress_frame, width=600)
+        self.overall_progress.pack(padx=10, pady=5)
+        self.overall_progress.set(0)
+        
+        # Current task progress
+        task_label = ctk.CTkLabel(progress_frame, text="Current Task:")
+        task_label.pack(anchor="w", padx=10, pady=(15, 5))
+        
+        self.task_progress = ctk.CTkProgressBar(progress_frame, width=600)
+        self.task_progress.pack(padx=10, pady=5)
+        self.task_progress.set(0)
+        
+        self.task_status = ctk.CTkLabel(
+            progress_frame,
+            text="Ready",
+            font=ctk.CTkFont(size=12),
+            text_color="gray"
+        )
+        self.task_status.pack(pady=10)
+        
+        # Buttons
+        button_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        button_frame.pack(pady=20)
+        
+        self.create_iso_btn = ctk.CTkButton(
+            button_frame,
+            text="Create ISO Only",
+            width=150,
+            command=self._on_create_iso,
+            state="disabled"
+        )
+        self.create_iso_btn.pack(side="left", padx=10)
+        
+        self.burn_btn = ctk.CTkButton(
+            button_frame,
+            text="Burn to Disc",
+            width=150,
+            command=self._on_burn,
+            state="disabled"
+        )
+        self.burn_btn.pack(side="left", padx=10)
+        
+        # Log output
+        log_label = ctk.CTkLabel(frame, text="Log Output:")
+        log_label.pack(anchor="w", padx=10)
+        
+        self.log_text = ctk.CTkTextbox(frame, height=150)
+        self.log_text.pack(fill="x", padx=10, pady=5)
+    
+    def _check_dependencies(self):
+        """Check for required system dependencies."""
+        deps = check_transcoder_deps()
+        burner_deps = check_burner_dependencies()
+        
+        missing = []
+        
+        if not deps.get("ffmpeg"):
+            missing.append("ffmpeg")
+        if not deps.get("ffprobe"):
+            missing.append("ffprobe")
+        
+        if missing:
+            self._log(f"⚠️ Missing dependencies: {', '.join(missing)}")
+            self._log("Install with: sudo apt install ffmpeg")
+        else:
+            self._log("✓ All transcoding dependencies available")
+        
+        # Check ISO creation tools
+        iso_tools = ["mkisofs", "genisoimage", "pycdlib"]
+        has_iso = any(burner_deps.get(t) for t in iso_tools)
+        
+        if has_iso:
+            self._log("✓ ISO creation available")
+        else:
+            self._log("⚠️ No ISO creation tool found")
+    
+    def _on_connect(self):
+        """Handle connect button click."""
+        url = self.url_entry.get().strip()
+        username = self.user_entry.get().strip()
+        password = self.pass_entry.get()
+        
+        if not url or not username or not password:
+            self.connect_status.configure(text="Please fill in all fields", text_color="red")
+            return
+        
+        self.connect_btn.configure(state="disabled", text="Connecting...")
+        self.connect_status.configure(text="Connecting to server...", text_color="gray")
+        self.update()
+        
+        # Run connection in thread
+        def connect():
+            try:
+                client = JellyfinClient(url)
+                
+                # Test connection first
+                info = client.get_server_info()
+                server_name = info.get('ServerName', 'Unknown')
+                
+                # Authenticate
+                client.authenticate(username, password)
+                
+                self.jellyfin_client = client
+                
+                # Update UI on success
+                self.after(0, lambda: self._on_connect_success(server_name))
+                
+            except JellyfinConnectionError as e:
+                self.after(0, lambda: self._on_connect_error(f"Connection failed: {e}"))
+            except AuthenticationError as e:
+                self.after(0, lambda: self._on_connect_error(f"Login failed: {e}"))
+            except Exception as e:
+                self.after(0, lambda: self._on_connect_error(f"Error: {e}"))
+        
+        threading.Thread(target=connect, daemon=True).start()
+    
+    def _on_connect_success(self, server_name: str):
+        """Handle successful connection."""
+        self.connect_btn.configure(state="normal", text="Connected ✓")
+        self.connect_status.configure(
+            text=f"Connected to {server_name}",
+            text_color="green"
+        )
+        
+        self._set_status(f"Connected to {server_name}")
+        self._log(f"✓ Connected to {server_name}")
+        
+        # Load TV shows
+        self._load_tv_shows()
+        
+        # Switch to library tab
+        self.tabview.set("Library")
+    
+    def _on_connect_error(self, message: str):
+        """Handle connection error."""
+        self.connect_btn.configure(state="normal", text="Connect")
+        self.connect_status.configure(text=message, text_color="red")
+        self._log(f"✗ {message}")
+    
+    def _load_tv_shows(self):
+        """Load TV shows from Jellyfin."""
+        if not self.jellyfin_client:
+            return
+        
+        self._set_status("Loading TV shows...")
+        
+        def load():
+            try:
+                shows = self.jellyfin_client.get_tv_shows()
+                self.after(0, lambda: self._populate_shows(shows))
+            except Exception as e:
+                self.after(0, lambda: self._log(f"Error loading shows: {e}"))
+        
+        threading.Thread(target=load, daemon=True).start()
+    
+    def _populate_shows(self, shows: list[Series]):
+        """Populate the shows list."""
+        # Clear existing widgets
+        for widget in self.show_widgets:
+            widget.destroy()
+        self.show_widgets.clear()
+        
+        for show in shows:
+            btn = ctk.CTkButton(
+                self.shows_frame,
+                text=f"📺 {show.name} ({show.year or 'N/A'})",
+                anchor="w",
+                command=lambda s=show: self._on_show_selected(s)
+            )
+            btn.pack(fill="x", pady=2)
+            self.show_widgets.append(btn)
+        
+        self._set_status(f"Found {len(shows)} TV shows")
+        self._log(f"✓ Loaded {len(shows)} TV shows")
+    
+    def _on_show_selected(self, series: Series):
+        """Handle show selection."""
+        self.selected_series = series
+        self.season_label.configure(text=series.name)
+        
+        # Load seasons
+        if not self.jellyfin_client:
+            return
+        
+        self._set_status(f"Loading seasons for {series.name}...")
+        
+        def load():
+            try:
+                seasons = self.jellyfin_client.get_seasons(series.id)
+                self.after(0, lambda: self._populate_seasons(seasons))
+            except Exception as e:
+                self.after(0, lambda: self._log(f"Error loading seasons: {e}"))
+        
+        threading.Thread(target=load, daemon=True).start()
+    
+    def _populate_seasons(self, seasons: list[Season]):
+        """Populate the seasons dropdown."""
+        self.seasons_data = {s.name: s for s in seasons}
+        
+        season_names = [s.name for s in seasons]
+        self.season_dropdown.configure(values=season_names, state="normal")
+        
+        if season_names:
+            self.season_dropdown.set(season_names[0])
+            self._on_season_selected(season_names[0])
+        
+        self._set_status(f"Found {len(seasons)} seasons")
+    
+    def _on_season_selected(self, season_name: str):
+        """Handle season selection from dropdown."""
+        if season_name not in self.seasons_data:
+            return
+        
+        season = self.seasons_data[season_name]
+        self.selected_season = season
+        
+        # Load episodes
+        if not self.jellyfin_client or not self.selected_series:
+            return
+        
+        self._set_status(f"Loading episodes...")
+        
+        def load():
+            try:
+                episodes = self.jellyfin_client.get_episodes(
+                    self.selected_series.id, 
+                    season.id
+                )
+                season.episodes = episodes
+                self.after(0, lambda: self._populate_episodes(episodes))
+            except Exception as e:
+                self.after(0, lambda: self._log(f"Error loading episodes: {e}"))
+        
+        threading.Thread(target=load, daemon=True).start()
+    
+    def _populate_episodes(self, episodes: list[Episode]):
+        """Populate the episodes list."""
+        # Clear existing
+        for widget in self.episodes_frame.winfo_children():
+            widget.destroy()
+        
+        for ep in episodes:
+            frame = ctk.CTkFrame(self.episodes_frame)
+            frame.pack(fill="x", pady=2)
+            
+            label = ctk.CTkLabel(
+                frame,
+                text=f"E{ep.index_number}: {ep.name} ({ep.runtime_minutes:.0f} min)",
+                anchor="w"
+            )
+            label.pack(fill="x", padx=10, pady=5)
+        
+        self.select_season_btn.configure(state="normal")
+        self._set_status(f"Found {len(episodes)} episodes")
+    
+    def _on_author_season(self):
+        """Handle author season button click."""
+        if not self.selected_season or not self.selected_series:
+            return
+        
+        # Calculate disc requirements
+        total_minutes = sum(ep.runtime_minutes for ep in self.selected_season.episodes)
+        
+        # Update config tab summary
+        self.summary_label.configure(
+            text=f"Series: {self.selected_series.name}\n"
+                 f"Season: {self.selected_season.name}\n"
+                 f"Episodes: {len(self.selected_season.episodes)}\n"
+                 f"Total Runtime: {total_minutes:.0f} minutes",
+            text_color="white"
+        )
+        
+        # Create disc plan
+        self._create_disc_plan()
+        
+        # Switch to config tab
+        self.tabview.set("Authoring")
+    
+    def _create_disc_plan(self):
+        """Create a disc spanning plan for the selected season."""
+        if not self.selected_season:
+            return
+        
+        try:
+            transcoder = Transcoder(self.config.staging_dir)
+            
+            jobs = []
+            for ep in self.selected_season.episodes:
+                job = TranscodeJob(
+                    input_path=self.jellyfin_client.get_stream_url(ep.id) if self.jellyfin_client else "",
+                    output_path=self.config.staging_dir / f"ep{ep.index_number:02d}.mpg",
+                    episode_name=ep.name,
+                    episode_index=ep.index_number,
+                    duration_seconds=ep.runtime_minutes * 60
+                )
+                jobs.append(job)
+            
+            self.disc_plans = transcoder.plan_disc_spanning(jobs)
+            
+            # Update burn tab
+            num_discs = len(self.disc_plans)
+            
+            if num_discs > 1:
+                disc_info_lines = []
+                for p in self.disc_plans:
+                    if p.episodes:
+                        first_ep = p.episodes[0].episode_index
+                        last_ep = p.episodes[-1].episode_index
+                        disc_info_lines.append(
+                            f"Disc {p.disc_number}: Episodes {first_ep}-{last_ep} "
+                            f"({p.total_minutes:.0f} min, ~{p.estimated_size_mb:.0f} MB)"
+                        )
+                self.disc_info_label.configure(
+                    text=f"⚠️ This season requires {num_discs} DVDs\n\n" +
+                         "\n".join(disc_info_lines),
+                    text_color="orange"
+                )
+            else:
+                plan = self.disc_plans[0] if self.disc_plans else None
+                if plan and plan.episodes:
+                    self.disc_info_label.configure(
+                        text=f"✓ Single DVD\n\n"
+                             f"Episodes: {len(plan.episodes)}\n"
+                             f"Runtime: {plan.total_minutes:.0f} minutes\n"
+                             f"Estimated Size: {plan.estimated_size_mb:.0f} MB",
+                        text_color="green"
+                    )
+            
+            # Enable buttons
+            self.create_iso_btn.configure(state="normal")
+            self.burn_btn.configure(state="normal")
+            
+            self._log(f"✓ Disc plan created: {num_discs} disc(s) required")
+            
+        except Exception as e:
+            self._log(f"Error creating disc plan: {e}")
+    
+    def _on_create_iso(self):
+        """Handle Create ISO button click."""
+        if not self.disc_plans or not self.selected_season or not self.selected_series:
+            return
+        
+        self.create_iso_btn.configure(state="disabled")
+        self.burn_btn.configure(state="disabled")
+        
+        def process():
+            try:
+                self._run_authoring_pipeline(burn=False)
+            except Exception as e:
+                self.after(0, lambda: self._log(f"Error: {e}"))
+            finally:
+                self.after(0, lambda: self.create_iso_btn.configure(state="normal"))
+                self.after(0, lambda: self.burn_btn.configure(state="normal"))
+        
+        threading.Thread(target=process, daemon=True).start()
+    
+    def _on_burn(self):
+        """Handle Burn button click."""
+        if not self.disc_plans or not self.selected_season or not self.selected_series:
+            return
+        
+        # Check for burner
+        burner = Burner(self.config.output_dir)
+        if not burner.is_burner_available():
+            self._log("⚠️ No disc burner found. Creating ISO instead.")
+            self._on_create_iso()
+            return
+        
+        self.create_iso_btn.configure(state="disabled")
+        self.burn_btn.configure(state="disabled")
+        
+        def process():
+            try:
+                self._run_authoring_pipeline(burn=True)
+            except Exception as e:
+                self.after(0, lambda: self._log(f"Error: {e}"))
+            finally:
+                self.after(0, lambda: self.create_iso_btn.configure(state="normal"))
+                self.after(0, lambda: self.burn_btn.configure(state="normal"))
+        
+        threading.Thread(target=process, daemon=True).start()
+    
+    def _run_authoring_pipeline(self, burn: bool = False):
+        """Run the full DVD authoring pipeline."""
+        self._update_task("Initializing...", 0)
+        self._update_overall(0)
+        
+        # Get settings
+        video_standard = VideoStandard.NTSC if self.standard_var.get() == "NTSC" else VideoStandard.PAL
+        menu_style = MenuStyle.MODERN if self.style_var.get() == "Modern" else MenuStyle.RETRO
+        include_subs = self.subtitles_var.get()
+        
+        # Initialize components
+        transcoder = Transcoder(
+            self.config.staging_dir,
+            VideoSettings(video_standard)
+        )
+        
+        menu_config = MenuConfig(
+            style=menu_style,
+            title=f"{self.selected_series.name} - {self.selected_season.name}",
+            season_overview=self.selected_season.overview or "",
+            include_subtitles=include_subs
+        )
+        
+        menu_builder = MenuBuilder(self.config.staging_dir, menu_config)
+        burner = Burner(self.config.output_dir)
+        
+        iso_files = []
+        
+        for disc_plan in self.disc_plans:
+            disc_num = disc_plan.disc_number
+            self._log(f"\n=== Processing Disc {disc_num} of {len(self.disc_plans)} ===")
+            
+            # Step 1: Transcode episodes
+            self._update_task(f"Disc {disc_num}: Transcoding episodes...", 0)
+            
+            total_episodes = len(disc_plan.episodes)
+            transcoded_files = []
+            
+            for i, job in enumerate(disc_plan.episodes):
+                self._update_task(
+                    f"Disc {disc_num}: Transcoding E{job.episode_index} ({i+1}/{total_episodes})",
+                    i / total_episodes
+                )
+                self._log(f"Transcoding: {job.episode_name}")
+                
+                def transcode_progress(progress: float):
+                    self.after(0, lambda p=progress: self.task_progress.set(
+                        (i + p) / total_episodes
+                    ))
+                
+                try:
+                    transcoder.transcode(
+                        job.input_path,
+                        job.output_path,
+                        progress_callback=transcode_progress,
+                        extract_subs=include_subs
+                    )
+                    transcoded_files.append(job.output_path)
+                except Exception as e:
+                    self._log(f"⚠️ Transcode failed for {job.episode_name}: {e}")
+            
+            # Step 2: Generate menus
+            self._update_task(f"Disc {disc_num}: Generating menus...", 0.5)
+            self._log("Generating DVD menus...")
+            
+            episodes = [
+                EpisodeThumbnail(
+                    episode_index=job.episode_index,
+                    title=job.episode_name
+                )
+                for job in disc_plan.episodes
+            ]
+            
+            bg_path = menu_builder.generate_menu_background(episodes=episodes)
+            hl_path = menu_builder.generate_highlight_mask(episodes)
+            sel_path = menu_builder.generate_select_mask(episodes)
+            
+            # Step 3: Generate menu video
+            self._update_task(f"Disc {disc_num}: Creating menu video...", 0.6)
+            self._log("Creating menu video...")
+            
+            menu_video = menu_builder.generate_menu_video(bg_path)
+            
+            # Step 4: Generate dvdauthor XML
+            self._update_task(f"Disc {disc_num}: Building DVD structure...", 0.7)
+            self._log("Building DVD structure...")
+            
+            xml_path = menu_builder.generate_dvdauthor_xml(
+                transcoded_files,
+                menu_video,
+                hl_path,
+                sel_path
+            )
+            
+            # Step 5: Build DVD structure
+            try:
+                dvd_dir = menu_builder.build_dvd_structure(xml_path)
+            except Exception as e:
+                self._log(f"⚠️ DVD structure build skipped (dvdauthor not available): {e}")
+                dvd_dir = self.config.staging_dir
+            
+            # Step 6: Create ISO
+            self._update_task(f"Disc {disc_num}: Creating ISO...", 0.8)
+            self._log("Creating ISO image...")
+            
+            iso_name = sanitize_filename(
+                f"{self.selected_series.name}_{self.selected_season.name}_Disc{disc_num}"
+            ) + ".iso"
+            iso_path = self.config.output_dir / iso_name
+            
+            def iso_progress(progress: float, status: str):
+                self.after(0, lambda: self._update_task(f"Disc {disc_num}: {status}", 0.8 + progress * 0.2))
+            
+            try:
+                iso_path = burner.create_iso(
+                    dvd_dir,
+                    iso_path,
+                    volume_label=f"DISC{disc_num}",
+                    progress_callback=iso_progress
+                )
+                iso_files.append(iso_path)
+                self._log(f"✓ Created: {iso_path}")
+            except Exception as e:
+                self._log(f"⚠️ ISO creation failed: {e}")
+            
+            self._update_overall(disc_num / len(self.disc_plans))
+        
+        # Step 7: Burn if requested
+        if burn and iso_files:
+            self._update_task("Burning to disc...", 0)
+            
+            def burn_progress(disc: int, total: int, progress: float, status: str):
+                self.after(0, lambda: self._update_task(f"Disc {disc}/{total}: {status}", progress))
+            
+            try:
+                success = burner.burn_multi_disc(
+                    iso_files,
+                    speed=int(self.speed_var.get().replace('x', '')),
+                    progress_callback=burn_progress
+                )
+                
+                if success:
+                    self._log("✓ All discs burned successfully!")
+                else:
+                    self._log("⚠️ Burning cancelled or failed")
+            except Exception as e:
+                self._log(f"⚠️ Burn failed: {e}")
+        
+        # Complete
+        self._update_overall(1.0)
+        self._update_task("Complete!", 1.0)
+        self._log("\n✓ DVD authoring complete!")
+        
+        if iso_files:
+            self._log(f"\nISO files saved to: {self.config.output_dir}")
+            for iso in iso_files:
+                self._log(f"  - {iso.name}")
+    
+    def _update_task(self, status: str, progress: float):
+        """Update task progress display."""
+        self.after(0, lambda: self.task_status.configure(text=status))
+        self.after(0, lambda: self.task_progress.set(progress))
+    
+    def _update_overall(self, progress: float):
+        """Update overall progress display."""
+        self.after(0, lambda: self.overall_progress.set(progress))
+    
+    def _set_status(self, message: str):
+        """Update the status bar."""
+        self.status_label.configure(text=message)
+    
+    def _log(self, message: str):
+        """Add message to log output."""
+        def update():
+            self.log_text.insert("end", message + "\n")
+            self.log_text.see("end")
+        
+        self.after(0, update)
+
+
+def main():
+    """Run the JellyDisc application."""
+    if not GUI_AVAILABLE:
+        print("Error: GUI dependencies not available.")
+        print(f"Missing: {GUI_ERROR}")
+        print("\nTo install GUI dependencies:")
+        print("  pip install customtkinter Pillow")
+        print("\nOn Linux, you may also need:")
+        print("  sudo apt install python3-tk")
+        sys.exit(1)
+    
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    app = JellyDiscApp()
+    app.mainloop()
+
+
+if __name__ == "__main__":
+    main()
