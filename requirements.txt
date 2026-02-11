@@ -1,0 +1,20 @@
+# JellyDisc - Automated DVD Authoring Suite
+# Python 3.12+
+
+# GUI Framework
+customtkinter>=5.2.0
+
+# Media Processing
+ffmpeg-python>=0.2.0
+
+# Image Processing (for menu generation)
+Pillow>=10.2.0
+
+# Jellyfin API Client
+jellyfin-apiclient-python>=1.9.2
+
+# HTTP requests (fallback/utilities)
+requests>=2.31.0
+
+# ISO Creation
+pycdlib>=1.14.0
