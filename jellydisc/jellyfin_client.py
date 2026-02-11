@@ -349,6 +349,10 @@ class JellyfinClient:
         """
         Construct URL for an item's image.
         
+        Note: This method does not validate if the image exists. The caller
+        should handle 404 errors gracefully (e.g., download_image returns None
+        on failure).
+        
         Args:
             item_id: ID of the item
             image_type: Type of image (Primary, Backdrop, Logo, etc.)
@@ -359,7 +363,7 @@ class JellyfinClient:
         """
         return f"{self.server_url}/Items/{item_id}/Images/{image_type}?maxWidth={max_width}"
     
-    def download_image(self, url: str, save_path: Path) -> Path:
+    def download_image(self, url: str, save_path: Path) -> Optional[Path]:
         """
         Download an image from the server.
         
@@ -368,19 +372,25 @@ class JellyfinClient:
             save_path: Path where to save the image
             
         Returns:
-            Path to the saved image
+            Path to the saved image, or None if download failed
         """
-        response = self.session.get(url, stream=True)
-        response.raise_for_status()
-        
-        save_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        with open(save_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-        
-        logger.info(f"Downloaded image to {save_path}")
-        return save_path
+        try:
+            response = self.session.get(url, stream=True, timeout=30)
+            if response.status_code != 200:
+                logger.warning(f"Image not found at {url}")
+                return None
+            
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            with open(save_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            
+            logger.info(f"Downloaded image to {save_path}")
+            return save_path
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Failed to download image: {e}")
+            return None
     
     def download_media_file(self, item_id: str, save_path: Path, 
                             progress_callback=None) -> Path:
@@ -446,13 +456,17 @@ class JellyfinClient:
             URL to theme song or None if not available
         """
         if not self.is_authenticated():
-            raise AuthenticationError("Not authenticated. Call authenticate() first.")
+            return None  # Return None instead of raising exception
         
-        result = self._make_request("GET", f"/Items/{series_id}/ThemeSongs")
-        
-        items = result.get("Items", [])
-        if items:
-            return f"{self.server_url}/Items/{items[0]['Id']}/Download?api_key={self.access_token}"
+        try:
+            result = self._make_request("GET", f"/Items/{series_id}/ThemeSongs")
+            
+            items = result.get("Items", [])
+            if items:
+                return f"{self.server_url}/Items/{items[0]['Id']}/Download?api_key={self.access_token}"
+        except JellyfinClientError:
+            # Return None on any API error instead of crashing
+            pass
         
         return None
     
