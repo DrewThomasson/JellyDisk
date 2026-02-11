@@ -508,10 +508,12 @@ class JellyDiscApp(_BaseClass):
         # Create episode entries
         for ep in self.selected_season.episodes:
             # Prepare episode data with fallbacks
+            season_idx = self.selected_season.index_number if self.selected_season.index_number else 1
+            ep_idx = ep.index_number if ep.index_number else 0
             ep_data = {
                 "id": ep.id,
                 "index": ep.index_number,
-                "title": ep.name if ep.name else f"S{self.selected_season.index_number:02d}E{ep.index_number:02d}",
+                "title": ep.name if ep.name else f"S{season_idx:02d}E{ep_idx:02d}",
                 "overview": ep.overview if ep.overview else "No description available.",
                 "thumbnail_path": None,  # Will be downloaded or set by user
                 "thumbnail_url": ep.primary_image_url,  # Jellyfin URL (may be None)
@@ -657,11 +659,16 @@ class JellyDiscApp(_BaseClass):
     
     def _on_use_solid_backdrop(self):
         """Use a solid color backdrop instead of an image."""
-        # Create a solid gray backdrop
         from PIL import Image as PILImage
         
+        # Use DVD resolution constants for solid backdrop
+        BACKDROP_WIDTH = 1280
+        BACKDROP_HEIGHT = 720
+        SOLID_COLOR = (30, 30, 40)  # Dark blue-gray
+        
         solid_path = self.config.assets_dir / "solid_backdrop.png"
-        img = PILImage.new('RGB', (1280, 720), color=(30, 30, 40))
+        img = PILImage.new('RGB', (BACKDROP_WIDTH, BACKDROP_HEIGHT), color=SOLID_COLOR)
+        img.save(solid_path)
         img.save(solid_path)
         
         self.editor_backdrop_path = solid_path
@@ -749,8 +756,8 @@ class JellyDiscApp(_BaseClass):
                 )
                 
                 # Generate menu image
-                preview_dir = Path("/tmp/jellydisc_preview")
-                preview_dir.mkdir(exist_ok=True)
+                import tempfile
+                preview_dir = Path(tempfile.mkdtemp(prefix="jellydisc_preview_"))
                 
                 builder = MenuBuilder(preview_dir, menu_config)
                 menu_path = builder.generate_menu_background(
@@ -782,9 +789,13 @@ class JellyDiscApp(_BaseClass):
         # Load and display image
         from PIL import Image as PILImage
         
+        # Preview dimensions - slightly smaller than popup to account for padding
+        PREVIEW_MAX_WIDTH = 760
+        PREVIEW_MAX_HEIGHT = 480
+        
         img = PILImage.open(image_path)
         # Scale to fit popup while maintaining aspect ratio
-        img.thumbnail((760, 480), PILImage.Resampling.LANCZOS)
+        img.thumbnail((PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT), PILImage.Resampling.LANCZOS)
         
         photo = ImageTk.PhotoImage(img)
         
@@ -821,7 +832,7 @@ class JellyDiscApp(_BaseClass):
                  f"Season: {self.selected_season.name if self.selected_season else 'Unknown'}\n"
                  f"Episodes: {len(self.editor_episodes)}\n"
                  f"Total Runtime: {total_minutes:.0f} minutes\n"
-                 f"(Using customized episode data from Editor)",
+                 f"Using customized episode data from Editor",
             text_color="white"
         )
         
