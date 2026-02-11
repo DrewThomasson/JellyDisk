@@ -10,5 +10,23 @@ __version__ = "0.1.0"
 __author__ = "JellyDisc Contributors"
 
 from .jellyfin_client import JellyfinClient
+from .transcoder import (
+    Transcoder,
+    TranscodeJob,
+    VideoSettings,
+    AudioSettings,
+    VideoStandard,
+    DiscPlan,
+    check_dependencies,
+)
 
-__all__ = ["JellyfinClient"]
+__all__ = [
+    "JellyfinClient",
+    "Transcoder",
+    "TranscodeJob",
+    "VideoSettings",
+    "AudioSettings",
+    "VideoStandard",
+    "DiscPlan",
+    "check_dependencies",
+]
