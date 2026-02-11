@@ -263,8 +263,8 @@ class Transcoder:
         
         video_bitrate_bps = int((video_space_mb * 8 * 1024 * 1024) / (total_duration_minutes * 60))
         
-        # Clamp to DVD-compliant range (1-9.8 Mbps for video)
-        video_bitrate_bps = max(1000000, min(9800000, video_bitrate_bps))
+        # Clamp to DVD-compliant range (1-9 Mbps for video to avoid encoder issues)
+        video_bitrate_bps = max(1000000, min(9000000, video_bitrate_bps))
         
         logger.info(
             f"Calculated optimal bitrate: {video_bitrate_bps / 1_000_000:.2f} Mbps "
@@ -450,35 +450,44 @@ class Transcoder:
         if video_bitrate is None:
             video_bitrate = self.calculate_optimal_bitrate(duration / 60 if duration else 30)
         
+        # Ensure bitrate is within MPEG2 encoder limits
+        # MPEG2 max bitrate for DVD is 9.8 Mbps, but we use 9 Mbps for safety
+        max_bitrate = 9_000_000
+        video_bitrate = min(video_bitrate, max_bitrate)
+        
         width, height = self.video_settings.resolution
         
+        # Calculate maxrate - must not exceed video_bitrate significantly for MPEG2
+        maxrate = min(int(video_bitrate * 1.05), max_bitrate)
+        bufsize = video_bitrate * 2
+        
         # Build FFmpeg command
+        # Note: Do NOT use -target with explicit codec options - they conflict
         cmd = [
             self._ffmpeg_path,
             "-y",  # Overwrite output
             "-i", input_path,
             
-            # Video settings
+            # Video settings for DVD-compliant MPEG-2
             "-c:v", "mpeg2video",
             "-b:v", str(video_bitrate),
-            "-maxrate", str(int(video_bitrate * 1.1)),
-            "-bufsize", str(int(video_bitrate * 2)),
-            "-g", "15",  # GOP size
+            "-maxrate", str(maxrate),
+            "-bufsize", str(bufsize),
+            "-g", "15",  # GOP size (closed GOPs for DVD)
             "-bf", "2",  # B-frames
             "-s", f"{width}x{height}",
             "-aspect", self.video_settings.aspect_ratio,
             "-r", self.video_settings.framerate,
             "-pix_fmt", "yuv420p",
             
-            # Audio settings
+            # Audio settings for DVD-compliant AC3
             "-c:a", self.audio_settings.codec,
             "-b:a", self.audio_settings.bitrate,
             "-ar", str(self.audio_settings.sample_rate),
             "-ac", str(self.audio_settings.channels),
             
-            # Output format
-            "-f", "vob",
-            "-target", f"{self.video_settings.standard.value}-dvd",
+            # Output format - use dvd for DVD VOB compatibility
+            "-f", "dvd",
             
             # Progress output
             "-progress", "pipe:1",
