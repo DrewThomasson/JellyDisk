@@ -531,6 +531,62 @@ class JellyDiscApp(_BaseClass):
         )
         
         self._log(f"✓ Loaded {len(self.editor_episodes)} episodes into editor")
+        
+        # Start background download of images
+        self._download_editor_images_async()
+    
+    def _download_editor_images_async(self):
+        """Download episode thumbnails and backdrop images in background."""
+        def download_images():
+            if not self.jellyfin_client:
+                return
+            
+            # Download backdrop first
+            if hasattr(self, '_jellyfin_backdrop_url') and self._jellyfin_backdrop_url:
+                backdrop_path = self.config.assets_dir / "editor_backdrop.jpg"
+                result = self.jellyfin_client.download_image(self._jellyfin_backdrop_url, backdrop_path)
+                if result:
+                    self.editor_backdrop_path = result
+                    self.after(0, lambda: self._update_backdrop_preview(result))
+                    self.after(0, lambda: self._log("✓ Downloaded series backdrop"))
+            
+            # Download episode thumbnails
+            for i, ep_data in enumerate(self.editor_episodes):
+                if ep_data.get("thumbnail_url"):
+                    thumb_path = self.config.assets_dir / f"editor_thumb_{i}.jpg"
+                    result = self.jellyfin_client.download_image(ep_data["thumbnail_url"], thumb_path)
+                    if result:
+                        ep_data["thumbnail_path"] = result
+                        # Update UI on main thread
+                        self.after(0, lambda idx=i, path=result: self._update_episode_thumbnail(idx, path))
+            
+            self.after(0, lambda: self._log("✓ Finished downloading images"))
+        
+        threading.Thread(target=download_images, daemon=True).start()
+        self._log("Downloading images from Jellyfin...")
+    
+    def _update_backdrop_preview(self, image_path: Path):
+        """Update the backdrop preview in the editor."""
+        try:
+            self.backdrop_status_label.configure(
+                text=f"✓ Backdrop loaded: {image_path.name}",
+                text_color="green"
+            )
+        except Exception:
+            pass
+    
+    def _update_episode_thumbnail(self, episode_index: int, image_path: Path):
+        """Update episode thumbnail button after download."""
+        try:
+            if episode_index < len(self.editor_episodes):
+                ep_data = self.editor_episodes[episode_index]
+                if "_thumb_btn" in ep_data:
+                    ep_data["_thumb_btn"].configure(
+                        text="✓",
+                        fg_color="green"
+                    )
+        except Exception:
+            pass
     
     def _create_episode_editor_widget(self, ep_data: dict, index: int):
         """Create an editable episode widget in the editor."""
