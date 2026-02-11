@@ -18,6 +18,7 @@ from typing import Optional, Callable
 try:
     import customtkinter as ctk
     from PIL import Image, ImageTk
+    from tkinter import filedialog
     GUI_AVAILABLE = True
 except ImportError as e:
     GUI_AVAILABLE = False
@@ -405,6 +406,99 @@ class JellyDiscApp(_BaseClass):
         )
         self.disc_info_label.pack(pady=15)
         
+        # === Output Mode Selection ===
+        output_mode_frame = ctk.CTkFrame(frame)
+        output_mode_frame.pack(fill="x", pady=10)
+        
+        mode_label = ctk.CTkLabel(
+            output_mode_frame,
+            text="Output Mode:",
+            font=ctk.CTkFont(size=14, weight="bold")
+        )
+        mode_label.pack(anchor="w", padx=10, pady=(10, 5))
+        
+        # Toggle switch frame
+        toggle_frame = ctk.CTkFrame(output_mode_frame, fg_color="transparent")
+        toggle_frame.pack(fill="x", padx=10, pady=5)
+        
+        # Output mode variable (0 = Save ISO, 1 = Burn to Disc)
+        self.output_mode_var = ctk.IntVar(value=0)
+        
+        # Save ISO radio button
+        self.iso_radio = ctk.CTkRadioButton(
+            toggle_frame,
+            text="💾 Save as ISO File",
+            variable=self.output_mode_var,
+            value=0,
+            command=self._on_output_mode_changed
+        )
+        self.iso_radio.pack(side="left", padx=20)
+        
+        # Burn to Disc radio button
+        self.burn_radio = ctk.CTkRadioButton(
+            toggle_frame,
+            text="📀 Burn to Disc",
+            variable=self.output_mode_var,
+            value=1,
+            command=self._on_output_mode_changed
+        )
+        self.burn_radio.pack(side="left", padx=20)
+        
+        # === ISO Save Options (shown when Save ISO selected) ===
+        self.iso_options_frame = ctk.CTkFrame(output_mode_frame)
+        self.iso_options_frame.pack(fill="x", padx=10, pady=10)
+        
+        iso_path_label = ctk.CTkLabel(self.iso_options_frame, text="Save Location:")
+        iso_path_label.pack(anchor="w", padx=10, pady=(5, 0))
+        
+        iso_path_inner = ctk.CTkFrame(self.iso_options_frame, fg_color="transparent")
+        iso_path_inner.pack(fill="x", padx=10, pady=5)
+        
+        # Default to a full ISO path
+        default_iso_path = self.config.output_dir.absolute() / "DVD.iso"
+        self.iso_path_var = ctk.StringVar(value=str(default_iso_path))
+        self.iso_path_entry = ctk.CTkEntry(
+            iso_path_inner,
+            textvariable=self.iso_path_var,
+            width=400
+        )
+        self.iso_path_entry.pack(side="left", padx=(0, 10))
+        
+        self.browse_iso_btn = ctk.CTkButton(
+            iso_path_inner,
+            text="Browse...",
+            width=100,
+            command=self._on_browse_iso_path
+        )
+        self.browse_iso_btn.pack(side="left")
+        
+        # === Burn Options (hidden initially, shown when Burn selected) ===
+        self.burn_options_frame = ctk.CTkFrame(output_mode_frame)
+        # Initially hidden
+        
+        drive_label = ctk.CTkLabel(self.burn_options_frame, text="Select DVD Drive:")
+        drive_label.pack(anchor="w", padx=10, pady=(5, 0))
+        
+        drive_inner = ctk.CTkFrame(self.burn_options_frame, fg_color="transparent")
+        drive_inner.pack(fill="x", padx=10, pady=5)
+        
+        self.drive_var = ctk.StringVar(value="No drives detected")
+        self.drive_dropdown = ctk.CTkComboBox(
+            drive_inner,
+            values=["No drives detected"],
+            variable=self.drive_var,
+            width=300
+        )
+        self.drive_dropdown.pack(side="left", padx=(0, 10))
+        
+        self.refresh_drives_btn = ctk.CTkButton(
+            drive_inner,
+            text="🔄 Refresh",
+            width=100,
+            command=self._refresh_drives
+        )
+        self.refresh_drives_btn.pack(side="left")
+        
         # Progress section
         progress_frame = ctk.CTkFrame(frame)
         progress_frame.pack(fill="x", pady=20)
@@ -437,30 +531,83 @@ class JellyDiscApp(_BaseClass):
         button_frame = ctk.CTkFrame(frame, fg_color="transparent")
         button_frame.pack(pady=20)
         
-        self.create_iso_btn = ctk.CTkButton(
+        self.start_btn = ctk.CTkButton(
             button_frame,
-            text="Create ISO Only",
-            width=150,
-            command=self._on_create_iso,
+            text="▶ Start",
+            width=200,
+            height=40,
+            command=self._on_start,
             state="disabled"
         )
-        self.create_iso_btn.pack(side="left", padx=10)
-        
-        self.burn_btn = ctk.CTkButton(
-            button_frame,
-            text="Burn to Disc",
-            width=150,
-            command=self._on_burn,
-            state="disabled"
-        )
-        self.burn_btn.pack(side="left", padx=10)
+        self.start_btn.pack(side="left", padx=10)
         
         # Log output
         log_label = ctk.CTkLabel(frame, text="Log Output:")
         log_label.pack(anchor="w", padx=10)
         
-        self.log_text = ctk.CTkTextbox(frame, height=150)
+        self.log_text = ctk.CTkTextbox(frame, height=120)
         self.log_text.pack(fill="x", padx=10, pady=5)
+    
+    def _on_output_mode_changed(self):
+        """Handle output mode toggle change."""
+        mode = self.output_mode_var.get()
+        
+        if mode == 0:  # Save ISO
+            self.burn_options_frame.pack_forget()
+            self.iso_options_frame.pack(fill="x", padx=10, pady=10)
+            self.start_btn.configure(text="💾 Create ISO")
+        else:  # Burn to Disc
+            self.iso_options_frame.pack_forget()
+            self.burn_options_frame.pack(fill="x", padx=10, pady=10)
+            self.start_btn.configure(text="📀 Burn to Disc")
+            self._refresh_drives()
+    
+    def _on_browse_iso_path(self):
+        """Open file dialog to select ISO save location."""
+        if not GUI_AVAILABLE:
+            return
+        
+        # Get default filename
+        default_name = "DVD.iso"
+        if self.selected_series and self.selected_season:
+            default_name = sanitize_filename(
+                f"{self.selected_series.name}_{self.selected_season.name}"
+            ) + ".iso"
+        
+        filepath = filedialog.asksaveasfilename(
+            title="Save ISO File",
+            defaultextension=".iso",
+            filetypes=[("ISO Image", "*.iso"), ("All Files", "*.*")],
+            initialfile=default_name,
+            initialdir=str(self.config.output_dir)
+        )
+        
+        if filepath:
+            self.iso_path_var.set(filepath)
+    
+    def _refresh_drives(self):
+        """Refresh the list of available DVD drives."""
+        burner = Burner(self.config.output_dir)
+        drives = burner.detect_drives()
+        
+        if drives:
+            drive_names = [f"{d.device_name} ({d.device_path})" for d in drives]
+            self.drive_dropdown.configure(values=drive_names)
+            self.drive_var.set(drive_names[0])
+            self._log(f"✓ Found {len(drives)} optical drive(s)")
+        else:
+            self.drive_dropdown.configure(values=["No drives detected"])
+            self.drive_var.set("No drives detected")
+            self._log("⚠️ No optical drives detected")
+    
+    def _on_start(self):
+        """Handle Start button click - routes to ISO or Burn based on mode."""
+        mode = self.output_mode_var.get()
+        
+        if mode == 0:  # Save ISO
+            self._on_create_iso()
+        else:  # Burn to Disc
+            self._on_burn()
     
     def _check_dependencies(self):
         """Check for required system dependencies."""
@@ -741,9 +888,8 @@ class JellyDiscApp(_BaseClass):
                         text_color="green"
                     )
             
-            # Enable buttons
-            self.create_iso_btn.configure(state="normal")
-            self.burn_btn.configure(state="normal")
+            # Enable start button
+            self.start_btn.configure(state="normal")
             
             self._log(f"✓ Disc plan created: {num_discs} disc(s) required")
             
@@ -755,8 +901,7 @@ class JellyDiscApp(_BaseClass):
         if not self.disc_plans or not self.selected_season or not self.selected_series:
             return
         
-        self.create_iso_btn.configure(state="disabled")
-        self.burn_btn.configure(state="disabled")
+        self.start_btn.configure(state="disabled")
         
         def process():
             try:
@@ -764,8 +909,7 @@ class JellyDiscApp(_BaseClass):
             except Exception as e:
                 self.after(0, lambda: self._log(f"Error: {e}"))
             finally:
-                self.after(0, lambda: self.create_iso_btn.configure(state="normal"))
-                self.after(0, lambda: self.burn_btn.configure(state="normal"))
+                self.after(0, lambda: self.start_btn.configure(state="normal"))
         
         threading.Thread(target=process, daemon=True).start()
     
@@ -781,8 +925,13 @@ class JellyDiscApp(_BaseClass):
             self._on_create_iso()
             return
         
-        self.create_iso_btn.configure(state="disabled")
-        self.burn_btn.configure(state="disabled")
+        # Check drive selection
+        drive = self.drive_var.get()
+        if "No drives" in drive:
+            self._log("⚠️ No DVD drive selected. Please select a drive or use Save ISO mode.")
+            return
+        
+        self.start_btn.configure(state="disabled")
         
         def process():
             try:
@@ -790,8 +939,7 @@ class JellyDiscApp(_BaseClass):
             except Exception as e:
                 self.after(0, lambda: self._log(f"Error: {e}"))
             finally:
-                self.after(0, lambda: self.create_iso_btn.configure(state="normal"))
-                self.after(0, lambda: self.burn_btn.configure(state="normal"))
+                self.after(0, lambda: self.start_btn.configure(state="normal"))
         
         threading.Thread(target=process, daemon=True).start()
     
@@ -900,10 +1048,23 @@ class JellyDiscApp(_BaseClass):
             self._update_task(f"Disc {disc_num}: Creating ISO...", 0.8)
             self._log("Creating ISO image...")
             
-            iso_name = sanitize_filename(
-                f"{self.selected_series.name}_{self.selected_season.name}_Disc{disc_num}"
-            ) + ".iso"
-            iso_path = self.config.output_dir / iso_name
+            # Determine ISO output path
+            # Use user-selected path for single-disc projects (both ISO and Burn modes use this path)
+            if len(self.disc_plans) == 1:
+                user_iso_path = self.iso_path_var.get()
+                if user_iso_path and Path(user_iso_path).suffix.lower() == '.iso':
+                    iso_path = Path(user_iso_path)
+                else:
+                    iso_name = sanitize_filename(
+                        f"{self.selected_series.name}_{self.selected_season.name}_Disc{disc_num}"
+                    ) + ".iso"
+                    iso_path = self.config.output_dir / iso_name
+            else:
+                # Multi-disc: use output directory with auto-generated names
+                iso_name = sanitize_filename(
+                    f"{self.selected_series.name}_{self.selected_season.name}_Disc{disc_num}"
+                ) + ".iso"
+                iso_path = self.config.output_dir / iso_name
             
             def iso_progress(progress: float, status: str):
                 self.after(0, lambda: self._update_task(f"Disc {disc_num}: {status}", 0.8 + progress * 0.2))
@@ -926,12 +1087,21 @@ class JellyDiscApp(_BaseClass):
         if burn and iso_files:
             self._update_task("Burning to disc...", 0)
             
+            # Get selected drive - extract device path from format "device_name (device_path)"
+            drive_str = self.drive_var.get()
+            device = None
+            import re
+            match = re.search(r'\(([^)]+)\)$', drive_str)
+            if match:
+                device = match.group(1)
+            
             def burn_progress(disc: int, total: int, progress: float, status: str):
                 self.after(0, lambda: self._update_task(f"Disc {disc}/{total}: {status}", progress))
             
             try:
                 success = burner.burn_multi_disc(
                     iso_files,
+                    device=device,
                     speed=int(self.speed_var.get().replace('x', '')),
                     progress_callback=burn_progress
                 )
