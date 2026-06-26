@@ -50,7 +50,7 @@ class Season:
 
 @dataclass
 class Series:
-    """Represents a TV show series."""
+    """Represents a TV show series or a movie."""
     id: str
     name: str
     overview: str = ""
@@ -60,6 +60,8 @@ class Series:
     logo_image_url: Optional[str] = None
     theme_song_url: Optional[str] = None
     seasons: list[Season] = field(default_factory=list)
+    actors: list[str] = field(default_factory=list)
+    type: str = "Series"
 
 
 class JellyfinClientError(Exception):
@@ -247,17 +249,97 @@ class JellyfinClient:
                 rating=item.get("OfficialRating"),
                 backdrop_image_url=self._get_image_url(item["Id"], "Backdrop"),
                 logo_image_url=self._get_image_url(item["Id"], "Logo"),
+                actors=[],  # Loaded on-demand
+                type="Series"
             )
             shows.append(series)
         
         return shows
-    
-    def get_seasons(self, series_id: str) -> list[Season]:
+
+    def search_library(self, query: str) -> list[Series]:
         """
-        Fetch all seasons for a TV show.
+        Search the library for Series and Movies matching the query.
         
         Args:
-            series_id: ID of the TV series
+            query: Search term
+            
+        Returns:
+            List of Series/Movie objects matching the query
+        """
+        if not self.is_authenticated():
+            raise AuthenticationError("Not authenticated. Call authenticate() first.")
+            
+        if not query:
+            return self.get_tv_shows()
+            
+        params = {
+            "IncludeItemTypes": "Series,Movie",
+            "Recursive": True,
+            "Fields": "Overview,ProviderIds,Path",
+            "SearchTerm": query,
+            "SortBy": "SortName",
+            "SortOrder": "Ascending"
+        }
+        
+        result = self._make_request("GET", f"/Users/{self.user_id}/Items", params=params)
+        
+        shows = []
+        for item in result.get("Items", []):
+            series = Series(
+                id=item["Id"],
+                name=item["Name"],
+                overview=item.get("Overview", ""),
+                year=item.get("ProductionYear"),
+                rating=item.get("OfficialRating"),
+                backdrop_image_url=self._get_image_url(item["Id"], "Backdrop"),
+                logo_image_url=self._get_image_url(item["Id"], "Logo"),
+                actors=[],  # Loaded on-demand
+                type=item.get("Type", "Series")
+            )
+            shows.append(series)
+            
+        return shows
+    
+    def get_item_details(self, item_id: str) -> dict:
+        """
+        Fetch full details for a specific media item.
+        
+        Args:
+            item_id: ID of the item
+            
+        Returns:
+            Details dictionary
+        """
+        if not self.is_authenticated():
+            raise AuthenticationError("Not authenticated. Call authenticate() first.")
+        
+        # Explicitly request People and Overview for detailed show info view
+        params = {
+            "Fields": "People,Overview"
+        }
+        return self._make_request("GET", f"/Users/{self.user_id}/Items/{item_id}", params=params)
+
+    def get_local_trailers(self, item_id: str) -> list[dict]:
+        """
+        Fetch local trailers associated with a media item.
+        
+        Args:
+            item_id: ID of the item
+            
+        Returns:
+            List of trailer item dictionaries
+        """
+        if not self.is_authenticated():
+            raise AuthenticationError("Not authenticated. Call authenticate() first.")
+        
+        return self._make_request("GET", f"/Items/{item_id}/LocalTrailers")
+
+    def get_seasons(self, series_id: str) -> list[Season]:
+        """
+        Fetch all seasons for a TV show or a mock season for a Movie.
+        
+        Args:
+            series_id: ID of the TV series or Movie
             
         Returns:
             List of Season objects
@@ -265,6 +347,21 @@ class JellyfinClient:
         if not self.is_authenticated():
             raise AuthenticationError("Not authenticated. Call authenticate() first.")
         
+        # Check if item is a Movie
+        item_details = self.get_item_details(series_id)
+        if item_details.get("Type") == "Movie":
+            # Return a single mock season for Movie compatibility
+            season = Season(
+                id=item_details["Id"],
+                name="Movie",
+                index_number=1,
+                series_id=series_id,
+                series_name=item_details["Name"],
+                overview=item_details.get("Overview", ""),
+                primary_image_url=self._get_image_url(item_details["Id"], "Primary")
+            )
+            return [season]
+            
         params = {
             "Fields": "Overview,Path"
         }
@@ -288,11 +385,11 @@ class JellyfinClient:
     
     def get_episodes(self, series_id: str, season_id: str) -> list[Episode]:
         """
-        Fetch all episodes for a season.
+        Fetch all episodes for a season, or a mock single-episode list representing a Movie.
         
         Args:
-            series_id: ID of the TV series
-            season_id: ID of the season
+            series_id: ID of the TV series or Movie
+            season_id: ID of the season or Movie
             
         Returns:
             List of Episode objects
@@ -300,6 +397,20 @@ class JellyfinClient:
         if not self.is_authenticated():
             raise AuthenticationError("Not authenticated. Call authenticate() first.")
         
+        # Check if item is a Movie
+        item_details = self.get_item_details(series_id)
+        if item_details.get("Type") == "Movie":
+            episode = Episode(
+                id=item_details["Id"],
+                name=item_details["Name"],
+                index_number=1,
+                overview=item_details.get("Overview", ""),
+                runtime_ticks=item_details.get("RunTimeTicks", 0),
+                primary_image_url=self._get_image_url(item_details["Id"], "Primary"),
+                media_sources=item_details.get("MediaSources", [])
+            )
+            return [episode]
+            
         params = {
             "SeasonId": season_id,
             "Fields": "Overview,Path,MediaSources"

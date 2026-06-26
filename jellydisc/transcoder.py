@@ -461,8 +461,27 @@ class Transcoder:
         maxrate = min(int(video_bitrate * 1.05), max_bitrate)
         bufsize = video_bitrate * 2
         
+        # Extract subtitles first if requested, so we can burn them in
+        srt_path = output_path.with_suffix('.srt')
+        has_subs = False
+        if extract_subs:
+            try:
+                extracted = self.extract_subtitles(input_path, srt_path)
+                if extracted and srt_path.exists() and srt_path.stat().st_size > 0:
+                    has_subs = True
+            except Exception as e:
+                logger.warning(f"Could not extract subtitles for burn-in: {e}")
+        
+        # Build video filter to scale and apply subtitles if available
+        if has_subs:
+            # Escape path for FFmpeg subtitles filter
+            # FFmpeg subtitles filter on macOS/Linux expects escaped colons
+            sub_path_str = str(srt_path.absolute().as_posix()).replace(':', '\\:')
+            vf = f"scale={width}:{height},subtitles='{sub_path_str}'"
+        else:
+            vf = f"scale={width}:{height}"
+            
         # Build FFmpeg command
-        # Note: Do NOT use -target with explicit codec options - they conflict
         cmd = [
             self._ffmpeg_path,
             "-y",  # Overwrite output
@@ -475,7 +494,7 @@ class Transcoder:
             "-bufsize", str(bufsize),
             "-g", "15",  # GOP size (closed GOPs for DVD)
             "-bf", "2",  # B-frames
-            "-s", f"{width}x{height}",
+            "-vf", vf,
             "-aspect", self.video_settings.aspect_ratio,
             "-r", self.video_settings.framerate,
             "-pix_fmt", "yuv420p",
@@ -503,15 +522,21 @@ class Transcoder:
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True
             )
             
+            recent_lines = []
             # Parse progress output
             while True:
                 line = process.stdout.readline()
                 if not line and process.poll() is not None:
                     break
+                
+                if line:
+                    recent_lines.append(line.strip())
+                    if len(recent_lines) > 50:
+                        recent_lines.pop(0)
                 
                 if line.startswith("out_time_us="):
                     try:
@@ -528,18 +553,13 @@ class Transcoder:
             return_code = process.wait()
             
             if return_code != 0:
-                stderr = process.stderr.read()
-                raise TranscodeFailedError(f"FFmpeg failed with code {return_code}: {stderr}")
+                error_log = "\n".join(recent_lines)
+                raise TranscodeFailedError(f"FFmpeg failed with code {return_code}:\n{error_log}")
             
             if not output_path.exists():
                 raise TranscodeFailedError(f"Output file was not created: {output_path}")
             
             logger.info(f"Transcoding complete: {output_path}")
-            
-            # Extract subtitles if requested
-            if extract_subs:
-                srt_path = output_path.with_suffix('.srt')
-                self.extract_subtitles(input_path, srt_path)
             
             if progress_callback:
                 progress_callback(1.0)

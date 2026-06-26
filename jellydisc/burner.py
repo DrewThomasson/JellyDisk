@@ -191,7 +191,7 @@ class Burner:
                         ))
         
         elif self.platform == BurnerPlatform.MACOS:
-            # Use diskutil to find optical drives
+            # Use diskutil list + diskutil info to find optical drives reliably
             try:
                 result = subprocess.run(
                     ["diskutil", "list"],
@@ -199,19 +199,46 @@ class Burner:
                     text=True,
                     timeout=10
                 )
-                # Parse output for optical drives
-                # This is a simplified detection
-                for line in result.stdout.split('\n'):
-                    if 'DVD' in line or 'CD' in line:
+                
+                disk_ids = []
+                for line in result.stdout.splitlines():
+                    if line.startswith("/dev/disk") and "physical" in line:
                         parts = line.split()
                         if parts:
-                            drives.append(DiscInfo(
-                                device_path=f"/dev/{parts[-1]}",
-                                device_name=parts[-1],
-                                is_ready=True
-                            ))
-            except subprocess.SubprocessError:
-                pass
+                            dev_path = parts[0]
+                            disk_id = dev_path.replace("/dev/", "")
+                            # strip any trailing colon
+                            disk_id = disk_id.split()[0].rstrip(':')
+                            disk_ids.append(disk_id)
+                            
+                for disk_id in disk_ids:
+                    info_result = subprocess.run(
+                        ["diskutil", "info", disk_id],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    
+                    if "Optical Drive Type" in info_result.stdout:
+                        device_name = "Apple SuperDrive"
+                        volume_name = ""
+                        for info_line in info_result.stdout.splitlines():
+                            if "Device / Media Name:" in info_line:
+                                device_name = info_line.split("Device / Media Name:")[-1].strip()
+                            elif "Volume Name:" in info_line:
+                                volume_name = info_line.split("Volume Name:")[-1].strip()
+                                
+                        display_name = f"{device_name}"
+                        if volume_name and "Not applicable" not in volume_name and "Untitled" not in volume_name:
+                            display_name += f" ({volume_name})"
+                            
+                        drives.append(DiscInfo(
+                            device_path=f"/dev/{disk_id}",
+                            device_name=display_name,
+                            is_ready=True
+                        ))
+            except Exception as e:
+                logger.error(f"Error detecting macOS drives: {e}")
         
         elif self.platform == BurnerPlatform.WINDOWS:
             # Use WMI or check drive letters
@@ -647,8 +674,101 @@ class Burner:
         """Burn ISO using hdiutil on macOS."""
         cmd = ["hdiutil", "burn", str(iso_path)]
         
+        # Check if the media is erasable (DVD-RW) to automatically pass -erase flag
+        is_erasable = False
         if device:
-            cmd.extend(["-device", device])
+            disk_id = device.replace("/dev/", "")
+            
+            # Force unmount the disk first to prevent "resource busy" or "no CD/DVD drives present" errors
+            try:
+                logger.info(f"Force unmounting disk {disk_id} before burning...")
+                if progress_callback:
+                    progress_callback(0.02, "Unmounting disc...")
+                subprocess.run(
+                    ["diskutil", "unmountDisk", "force", disk_id],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+            except Exception as e:
+                logger.warning(f"Failed to force unmount disk: {e}")
+                
+            try:
+                info_result = subprocess.run(
+                    ["diskutil", "info", disk_id],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if "Optical Media Erasable" in info_result.stdout:
+                    for line in info_result.stdout.splitlines():
+                        if "Optical Media Erasable:" in line and "Yes" in line:
+                            is_erasable = True
+                            break
+            except Exception:
+                pass
+                
+            # Check if media is blank using drutil status
+            is_blank = False
+            try:
+                status_res = subprocess.run(
+                    ["drutil", "status"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if "blank" in status_res.stdout.lower():
+                    is_blank = True
+            except Exception:
+                pass
+                
+            # Map the disk_id / device path to the OpenFirmware/IOService path from hdiutil burn -list
+            openfirmware_path = None
+            is_apple_silicon = False
+            try:
+                if platform.machine() == "arm64":
+                    is_apple_silicon = True
+            except Exception:
+                pass
+                
+            if is_apple_silicon:
+                logger.info("Apple Silicon (arm64) detected. Bypassing OpenFirmware device path to prevent Inappropriate ioctl eject loops.")
+            else:
+                try:
+                    list_res = subprocess.run(
+                        ["hdiutil", "burn", "-list"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    ioservice_paths = []
+                    for line in list_res.stdout.splitlines():
+                        line_strip = line.strip()
+                        if line_strip.startswith("IOService:"):
+                            ioservice_paths.append(line_strip)
+                    
+                    if len(ioservice_paths) == 1:
+                        openfirmware_path = ioservice_paths[0]
+                    elif len(ioservice_paths) > 1:
+                        # If multiple, try to find one matching the disk ID or just use first
+                        openfirmware_path = ioservice_paths[0]
+                except Exception as e:
+                    logger.warning(f"Failed to parse hdiutil burn -list: {e}")
+
+            if openfirmware_path and not is_apple_silicon:
+                cmd.extend(["-device", openfirmware_path])
+                logger.info(f"Using OpenFirmware device path: {openfirmware_path}")
+            else:
+                logger.info("Omit -device option to let hdiutil auto-detect the drive.")
+                
+        if is_erasable and not is_blank:
+            logger.info("Erasable media (DVD-RW) detected and is not blank. Appending -erase option to hdiutil burn.")
+            cmd.append("-erase")
+            if progress_callback:
+                progress_callback(0.05, "Erasing rewritable disc...")
+        else:
+            if is_erasable and is_blank:
+                logger.info("Erasable media (DVD-RW) detected but it is already blank. Skipping erase step.")
         
         if progress_callback:
             progress_callback(0.1, "Burning disc...")
@@ -656,7 +776,32 @@ class Burner:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
         
         if result.returncode != 0:
-            raise BurnFailedError(f"hdiutil burn failed: {result.stderr}")
+            # If it failed with the device flag, try again without it (common on Apple Silicon/USB drives)
+            if "-device" in cmd:
+                logger.warning(f"hdiutil burn failed with device flag ({result.stderr.strip()}). Retrying without -device flag...")
+                try:
+                    idx = cmd.index("-device")
+                    cmd.pop(idx) # remove "-device"
+                    cmd.pop(idx) # remove the path
+                except ValueError:
+                    pass
+                
+                # Force unmount again just in case
+                if device:
+                    try:
+                        subprocess.run(
+                            ["diskutil", "unmountDisk", "force", disk_id],
+                            capture_output=True,
+                            text=True,
+                            timeout=10
+                        )
+                    except Exception:
+                        pass
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
+            
+            if result.returncode != 0:
+                raise BurnFailedError(f"hdiutil burn failed: {result.stderr}")
         
         if progress_callback:
             progress_callback(1.0, "Burn complete!")
@@ -743,6 +888,134 @@ class Burner:
                 return False
         
         return True
+
+    def erase_media(
+        self,
+        device: Optional[str] = None,
+        quick: bool = True,
+        progress_callback: Optional[Callable[[float, str], None]] = None
+    ) -> bool:
+        """
+        Erase/wipe a rewritable disc (CD-RW, DVD-RW, DVD+RW, etc.).
+        
+        Args:
+            device: Device path (auto-detected if not provided)
+            quick: True for quick erase, False for full erase
+            progress_callback: Optional callback(progress: 0-1, status: str)
+            
+        Returns:
+            True if erasing was successful
+        """
+        if progress_callback:
+            progress_callback(0.0, "Starting erase...")
+            
+        try:
+            if self.platform == BurnerPlatform.LINUX:
+                # Linux: use dvd+rw-format or wodim
+                device = device or "/dev/sr0"
+                # Check for dvd+rw-format first (part of dvd+rw-tools)
+                format_tool = shutil.which("dvd+rw-format")
+                if format_tool:
+                    cmd = [format_tool, "-force", device]
+                    if not quick:
+                        cmd.append("-lead-out")
+                else:
+                    wodim = shutil.which("wodim") or shutil.which("cdrecord")
+                    if wodim:
+                        blank_mode = "fast" if quick else "all"
+                        cmd = [wodim, f"dev={device}", f"blank={blank_mode}"]
+                    else:
+                        raise BurnerError("Neither dvd+rw-format nor wodim found for erasing")
+                
+                logger.info(f"Running Linux erase command: {' '.join(cmd)}")
+                if progress_callback:
+                    progress_callback(0.2, "Erasing rewritable media...")
+                subprocess.run(cmd, check=True, timeout=600)
+                if progress_callback:
+                    progress_callback(1.0, "Erase complete!")
+                return True
+                
+            elif self.platform == BurnerPlatform.MACOS:
+                # macOS: use drutil
+                # Let's map device path (e.g. /dev/disk6) to drutil's 1-based drive index
+                drive_idx = None
+                if device:
+                    # Let's query drutil status for indexes 1 to 5 to find matching device name
+                    for idx in range(1, 6):
+                        try:
+                            status_res = subprocess.run(
+                                ["drutil", "-drive", str(idx), "status"],
+                                capture_output=True,
+                                text=True,
+                                timeout=5
+                            )
+                            if device in status_res.stdout or device.replace("/dev/", "") in status_res.stdout:
+                                drive_idx = idx
+                                break
+                        except Exception:
+                            pass
+                
+                cmd = ["drutil"]
+                if drive_idx is not None:
+                    cmd.extend(["-drive", str(drive_idx)])
+                elif device:
+                    # Fallback to vendor/product or just default if we couldn't match index
+                    pass
+                
+                cmd.extend(["erase", "quick" if quick else "full"])
+                
+                logger.info(f"Running macOS erase command: {' '.join(cmd)}")
+                if progress_callback:
+                    progress_callback(0.2, "Erasing rewritable media (this may take a minute)...")
+                
+                # Unmount the disk first to avoid resource busy errors
+                if device:
+                    disk_id = device.replace("/dev/", "")
+                    try:
+                        subprocess.run(
+                            ["diskutil", "unmountDisk", "force", disk_id],
+                            capture_output=True,
+                            text=True,
+                            timeout=10
+                        )
+                    except Exception:
+                        pass
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+                if result.returncode != 0:
+                    raise BurnerError(f"drutil erase failed: {result.stderr or result.stdout}")
+                
+                if progress_callback:
+                    progress_callback(1.0, "Erase complete!")
+                return True
+                
+            elif self.platform == BurnerPlatform.WINDOWS:
+                # Windows: use ImgBurn
+                if not self._burner_path:
+                    raise NoBurnerFoundError("ImgBurn not found. Please install ImgBurn to erase discs.")
+                device = device or "D:"
+                cmd = [
+                    self._burner_path,
+                    "/MODE", "ERASE",
+                    "/DEST", device,
+                    "/ERASE_TYPE", "QUICK" if quick else "FULL",
+                    "/START",
+                    "/CLOSE"
+                ]
+                logger.info(f"Running Windows erase command: {' '.join(cmd)}")
+                if progress_callback:
+                    progress_callback(0.2, "Erasing rewritable media...")
+                subprocess.run(cmd, check=True, timeout=600)
+                if progress_callback:
+                    progress_callback(1.0, "Erase complete!")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Erase failed: {e}")
+            raise BurnerError(f"Failed to erase disc: {e}")
+            
+        return False
+
 
 
 def check_burner_dependencies() -> dict[str, bool]:

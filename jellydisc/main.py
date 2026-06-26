@@ -18,7 +18,7 @@ from typing import Optional, Callable
 try:
     import customtkinter as ctk
     from PIL import Image, ImageTk
-    from tkinter import filedialog
+    from tkinter import filedialog, messagebox
     GUI_AVAILABLE = True
 except ImportError as e:
     GUI_AVAILABLE = False
@@ -86,15 +86,16 @@ else:
 @dataclass
 class AppConfig:
     """Application configuration."""
-    # Working directories
-    assets_dir: Path = Path("assets")
-    staging_dir: Path = Path("staging")
-    output_dir: Path = Path("output")
+    # Working directories (resolve relative to the project package root)
+    assets_dir: Path = Path(__file__).resolve().parent.parent / "assets"
+    staging_dir: Path = Path(__file__).resolve().parent.parent / "staging"
+    output_dir: Path = Path(__file__).resolve().parent.parent / "output"
     
     # Authoring settings
     video_standard: VideoStandard = VideoStandard.NTSC
     audio_language: str = "English"
     include_subtitles: bool = True
+    include_trailer: bool = True
     menu_style: MenuStyle = MenuStyle.MODERN
     
     # Burn settings
@@ -108,8 +109,8 @@ class JellyDiscApp(_BaseClass):
         super().__init__()
         
         self.title("JellyDisc - DVD Authoring Suite")
-        self.geometry("1000x700")
-        self.minsize(800, 600)
+        self.geometry("1000x780")
+        self.minsize(800, 680)
         
         # Application state
         self.config = AppConfig()
@@ -244,10 +245,20 @@ class JellyDiscApp(_BaseClass):
         # Header
         header = ctk.CTkLabel(
             left_frame,
-            text="TV Shows",
+            text="TV Shows & Movies",
             font=ctk.CTkFont(size=18, weight="bold")
         )
-        header.pack(pady=10)
+        header.pack(pady=(10, 5))
+        
+        # Search Bar
+        self.search_var = ctk.StringVar(value="")
+        self.search_entry = ctk.CTkEntry(
+            left_frame,
+            placeholder_text="Search library...",
+            textvariable=self.search_var
+        )
+        self.search_entry.pack(fill="x", padx=10, pady=(0, 10))
+        self.search_var.trace_add("write", self._on_search_changed)
         
         # Show scrollable frame for shows
         self.shows_frame = ctk.CTkScrollableFrame(left_frame)
@@ -344,9 +355,18 @@ class JellyDiscApp(_BaseClass):
         )
         subtitles_check.grid(row=2, column=1, sticky="w", padx=10, pady=10)
         
+        # Include Trailer
+        self.trailer_var = ctk.BooleanVar(value=True)
+        trailer_check = ctk.CTkCheckBox(
+            settings_frame,
+            text="Include Trailer (if available)",
+            variable=self.trailer_var
+        )
+        trailer_check.grid(row=3, column=1, sticky="w", padx=10, pady=10)
+        
         # Menu Style
         style_label = ctk.CTkLabel(settings_frame, text="Menu Style:")
-        style_label.grid(row=3, column=0, sticky="e", padx=10, pady=10)
+        style_label.grid(row=4, column=0, sticky="e", padx=10, pady=10)
         
         self.style_var = ctk.StringVar(value="Modern")
         style_dropdown = ctk.CTkComboBox(
@@ -355,11 +375,11 @@ class JellyDiscApp(_BaseClass):
             variable=self.style_var,
             width=200
         )
-        style_dropdown.grid(row=3, column=1, sticky="w", padx=10, pady=10)
+        style_dropdown.grid(row=4, column=1, sticky="w", padx=10, pady=10)
         
         # Burn Speed
         speed_label = ctk.CTkLabel(settings_frame, text="Burn Speed:")
-        speed_label.grid(row=4, column=0, sticky="e", padx=10, pady=10)
+        speed_label.grid(row=5, column=0, sticky="e", padx=10, pady=10)
         
         self.speed_var = ctk.StringVar(value="4x")
         speed_dropdown = ctk.CTkComboBox(
@@ -368,7 +388,7 @@ class JellyDiscApp(_BaseClass):
             variable=self.speed_var,
             width=200
         )
-        speed_dropdown.grid(row=4, column=1, sticky="w", padx=10, pady=10)
+        speed_dropdown.grid(row=5, column=1, sticky="w", padx=10, pady=10)
         
         # Summary frame
         self.config_summary = ctk.CTkFrame(frame)
@@ -385,7 +405,7 @@ class JellyDiscApp(_BaseClass):
     def _create_burn_tab(self):
         """Create the Burn tab with progress tracking."""
         frame = ctk.CTkFrame(self.tab_burn)
-        frame.pack(fill="both", expand=True, padx=20, pady=20)
+        frame.pack(fill="both", expand=True, padx=20, pady=10)
         
         # Title
         title = ctk.CTkLabel(
@@ -393,33 +413,33 @@ class JellyDiscApp(_BaseClass):
             text="DVD Authoring & Burning",
             font=ctk.CTkFont(size=20, weight="bold")
         )
-        title.pack(pady=(0, 20))
+        title.pack(pady=(0, 10))
         
         # Disc info
         self.disc_info_frame = ctk.CTkFrame(frame)
-        self.disc_info_frame.pack(fill="x", pady=10)
+        self.disc_info_frame.pack(fill="x", pady=5)
         
         self.disc_info_label = ctk.CTkLabel(
             self.disc_info_frame,
             text="No project loaded",
             font=ctk.CTkFont(size=14)
         )
-        self.disc_info_label.pack(pady=15)
+        self.disc_info_label.pack(pady=8)
         
         # === Output Mode Selection ===
         output_mode_frame = ctk.CTkFrame(frame)
-        output_mode_frame.pack(fill="x", pady=10)
+        output_mode_frame.pack(fill="x", pady=5)
         
         mode_label = ctk.CTkLabel(
             output_mode_frame,
             text="Output Mode:",
             font=ctk.CTkFont(size=14, weight="bold")
         )
-        mode_label.pack(anchor="w", padx=10, pady=(10, 5))
+        mode_label.pack(anchor="w", padx=10, pady=(5, 2))
         
         # Toggle switch frame
         toggle_frame = ctk.CTkFrame(output_mode_frame, fg_color="transparent")
-        toggle_frame.pack(fill="x", padx=10, pady=5)
+        toggle_frame.pack(fill="x", padx=10, pady=2)
         
         # Output mode variable (0 = Save ISO, 1 = Burn to Disc)
         self.output_mode_var = ctk.IntVar(value=0)
@@ -446,13 +466,13 @@ class JellyDiscApp(_BaseClass):
         
         # === ISO Save Options (shown when Save ISO selected) ===
         self.iso_options_frame = ctk.CTkFrame(output_mode_frame)
-        self.iso_options_frame.pack(fill="x", padx=10, pady=10)
+        self.iso_options_frame.pack(fill="x", padx=10, pady=5)
         
         iso_path_label = ctk.CTkLabel(self.iso_options_frame, text="Save Location:")
-        iso_path_label.pack(anchor="w", padx=10, pady=(5, 0))
+        iso_path_label.pack(anchor="w", padx=10, pady=(2, 0))
         
         iso_path_inner = ctk.CTkFrame(self.iso_options_frame, fg_color="transparent")
-        iso_path_inner.pack(fill="x", padx=10, pady=5)
+        iso_path_inner.pack(fill="x", padx=10, pady=2)
         
         # Default to a full ISO path
         default_iso_path = self.config.output_dir.absolute() / "DVD.iso"
@@ -477,10 +497,10 @@ class JellyDiscApp(_BaseClass):
         # Initially hidden
         
         drive_label = ctk.CTkLabel(self.burn_options_frame, text="Select DVD Drive:")
-        drive_label.pack(anchor="w", padx=10, pady=(5, 0))
+        drive_label.pack(anchor="w", padx=10, pady=(2, 0))
         
         drive_inner = ctk.CTkFrame(self.burn_options_frame, fg_color="transparent")
-        drive_inner.pack(fill="x", padx=10, pady=5)
+        drive_inner.pack(fill="x", padx=10, pady=2)
         
         self.drive_var = ctk.StringVar(value="No drives detected")
         self.drive_dropdown = ctk.CTkComboBox(
@@ -499,24 +519,32 @@ class JellyDiscApp(_BaseClass):
         )
         self.refresh_drives_btn.pack(side="left")
         
+        self.erase_disc_btn = ctk.CTkButton(
+            drive_inner,
+            text="🧹 Erase Disc",
+            width=100,
+            command=self._on_erase_disc
+        )
+        self.erase_disc_btn.pack(side="left", padx=(10, 0))
+        
         # Progress section
         progress_frame = ctk.CTkFrame(frame)
-        progress_frame.pack(fill="x", pady=20)
+        progress_frame.pack(fill="x", pady=5)
         
         # Overall progress
         overall_label = ctk.CTkLabel(progress_frame, text="Overall Progress:")
-        overall_label.pack(anchor="w", padx=10, pady=(10, 5))
+        overall_label.pack(anchor="w", padx=10, pady=(5, 2))
         
         self.overall_progress = ctk.CTkProgressBar(progress_frame, width=600)
-        self.overall_progress.pack(padx=10, pady=5)
+        self.overall_progress.pack(padx=10, pady=2)
         self.overall_progress.set(0)
         
         # Current task progress
         task_label = ctk.CTkLabel(progress_frame, text="Current Task:")
-        task_label.pack(anchor="w", padx=10, pady=(15, 5))
+        task_label.pack(anchor="w", padx=10, pady=(5, 2))
         
         self.task_progress = ctk.CTkProgressBar(progress_frame, width=600)
-        self.task_progress.pack(padx=10, pady=5)
+        self.task_progress.pack(padx=10, pady=2)
         self.task_progress.set(0)
         
         self.task_status = ctk.CTkLabel(
@@ -525,11 +553,11 @@ class JellyDiscApp(_BaseClass):
             font=ctk.CTkFont(size=12),
             text_color="gray"
         )
-        self.task_status.pack(pady=10)
+        self.task_status.pack(pady=5)
         
         # Buttons
         button_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        button_frame.pack(pady=20)
+        button_frame.pack(pady=5)
         
         self.start_btn = ctk.CTkButton(
             button_frame,
@@ -545,8 +573,8 @@ class JellyDiscApp(_BaseClass):
         log_label = ctk.CTkLabel(frame, text="Log Output:")
         log_label.pack(anchor="w", padx=10)
         
-        self.log_text = ctk.CTkTextbox(frame, height=120)
-        self.log_text.pack(fill="x", padx=10, pady=5)
+        self.log_text = ctk.CTkTextbox(frame, height=80)
+        self.log_text.pack(fill="x", padx=10, pady=2)
     
     def _on_output_mode_changed(self):
         """Handle output mode toggle change."""
@@ -599,6 +627,68 @@ class JellyDiscApp(_BaseClass):
             self.drive_dropdown.configure(values=["No drives detected"])
             self.drive_var.set("No drives detected")
             self._log("⚠️ No optical drives detected")
+            
+    def _on_erase_disc(self):
+        """Handle Erase Disc button click."""
+        if not GUI_AVAILABLE:
+            return
+            
+        drive = self.drive_var.get()
+        if "No drives" in drive:
+            self._log("⚠️ No DVD drive selected. Please select a drive to erase.")
+            return
+            
+        # Get selected drive - extract device path from format "device_name (device_path)"
+        device = None
+        import re
+        match = re.search(r'\(([^)]+)\)$', drive)
+        if match:
+            device = match.group(1)
+            
+        if not device:
+            self._log("⚠️ Could not determine device path.")
+            return
+            
+        # Confirm with the user
+        if not messagebox.askyesno(
+            "Confirm Erase",
+            f"Are you sure you want to erase the rewritable disc in {drive}?\nAll data on the disc will be permanently lost."
+        ):
+            return
+            
+        self.erase_disc_btn.configure(state="disabled")
+        self.start_btn.configure(state="disabled")
+        self._update_task("Erasing disc...", 0.2)
+        
+        def process():
+            try:
+                burner = Burner(self.config.output_dir)
+                
+                def erase_progress(progress: float, status: str):
+                    self.after(0, lambda: self._update_task(status, progress))
+                    
+                success = burner.erase_media(
+                    device=device,
+                    quick=True,
+                    progress_callback=erase_progress
+                )
+                
+                if success:
+                    self.after(0, lambda: self._log("✓ Disc erased successfully!"))
+                    self.after(0, lambda: self._update_task("Erase complete", 1.0))
+                else:
+                    self.after(0, lambda: self._log("⚠️ Erase failed"))
+                    self.after(0, lambda: self._update_task("Erase failed", 0))
+            except Exception as e:
+                self.after(0, lambda: self._log(f"⚠️ Erase error: {e}"))
+                self.after(0, lambda: self._update_task("Erase error", 0))
+            finally:
+                self.after(0, lambda: self.erase_disc_btn.configure(state="normal"))
+                # Enable start button if a project is loaded
+                if self.disc_plans:
+                    self.after(0, lambda: self.start_btn.configure(state="normal"))
+                    
+        threading.Thread(target=process, daemon=True).start()
     
     def _on_start(self):
         """Handle Start button click - routes to ISO or Burn based on mode."""
@@ -716,38 +806,98 @@ class JellyDiscApp(_BaseClass):
         threading.Thread(target=load, daemon=True).start()
     
     def _populate_shows(self, shows: list[Series]):
-        """Populate the shows list."""
+        """Populate the shows list on initial load."""
+        self.all_shows = shows
+        self._populate_search_results(shows, "")
+        self._set_status(f"Found {len(shows)} TV shows")
+        self._log(f"✓ Loaded {len(shows)} TV shows")
+
+    def _on_search_changed(self, *args):
+        """Called when search text changes (debounced search)."""
+        if hasattr(self, "_search_timer_id") and self._search_timer_id:
+            self.after_cancel(self._search_timer_id)
+            
+        self._search_timer_id = self.after(400, self._perform_server_search)
+
+    def _perform_server_search(self):
+        """Run search query on the Jellyfin server."""
+        if not self.jellyfin_client:
+            return
+            
+        query = self.search_var.get().strip()
+        if not query:
+            # If search is cleared, just show all TV shows loaded on startup
+            if hasattr(self, "all_shows"):
+                self._populate_search_results(self.all_shows, "")
+            return
+            
+        self._set_status(f"Searching for '{query}'...")
+        
+        def run_search():
+            try:
+                results = self.jellyfin_client.search_library(query)
+                # Verify the query hasn't changed since this thread started
+                if self.search_var.get().strip() == query:
+                    self.after(0, lambda: self._populate_search_results(results, query))
+            except Exception as e:
+                self.after(0, lambda: self._log(f"Search error: {e}"))
+                
+        threading.Thread(target=run_search, daemon=True).start()
+
+    def _populate_search_results(self, results: list[Series], query: str):
+        """Populate the shows sidebar with search results."""
         # Clear existing widgets
         for widget in self.show_widgets:
             widget.destroy()
         self.show_widgets.clear()
         
-        for show in shows:
+        for show in results:
+            prefix = "🎬" if show.type == "Movie" else "📺"
             btn = ctk.CTkButton(
                 self.shows_frame,
-                text=f"📺 {show.name} ({show.year or 'N/A'})",
+                text=f"{prefix} {show.name} ({show.year or 'N/A'})",
                 anchor="w",
                 command=lambda s=show: self._on_show_selected(s)
             )
             btn.pack(fill="x", pady=2)
             self.show_widgets.append(btn)
-        
-        self._set_status(f"Found {len(shows)} TV shows")
-        self._log(f"✓ Loaded {len(shows)} TV shows")
+            
+        if query:
+            self._set_status(f"Found {len(results)} matches for '{query}'")
+        else:
+            self._set_status(f"Found {len(results)} TV shows")
     
     def _on_show_selected(self, series: Series):
         """Handle show selection."""
         self.selected_series = series
         self.season_label.configure(text=series.name)
         
-        # Load seasons
+        # Load seasons and detailed metadata
         if not self.jellyfin_client:
             return
         
-        self._set_status(f"Loading seasons for {series.name}...")
+        self._set_status(f"Loading details for {series.name}...")
         
         def load():
             try:
+                # Fetch detailed metadata (actors & full overview) asynchronously
+                try:
+                    details = self.jellyfin_client.get_item_details(series.id)
+                    actors = []
+                    for person in details.get("People", []):
+                        if person.get("Type") == "Actor":
+                            name = person.get("Name")
+                            role = person.get("Role")
+                            if role:
+                                actors.append(f"{name} as {role}")
+                            else:
+                                actors.append(name)
+                    series.actors = actors[:10]
+                    series.overview = details.get("Overview", "")
+                except Exception as ex:
+                    logger.warning(f"Failed to fetch item details: {ex}")
+                
+                # Fetch seasons list
                 seasons = self.jellyfin_client.get_seasons(series.id)
                 self.after(0, lambda: self._populate_seasons(seasons))
             except Exception as e:
@@ -838,19 +988,45 @@ class JellyDiscApp(_BaseClass):
         # Switch to config tab
         self.tabview.set("Authoring")
     
+    @property
+    def current_staging_dir(self) -> Path:
+        """Get the staging directory for the currently selected series and season."""
+        if not self.selected_series or not self.selected_season:
+            return self.config.staging_dir
+        
+        series_folder = sanitize_filename(self.selected_series.name)
+        season_folder = sanitize_filename(self.selected_season.name)
+        folder = self.config.staging_dir / series_folder / season_folder
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
     def _create_disc_plan(self):
         """Create a disc spanning plan for the selected season."""
         if not self.selected_season:
             return
         
         try:
-            transcoder = Transcoder(self.config.staging_dir)
+            transcoder = Transcoder(self.current_staging_dir)
+            
+            # Migrate any cached transcode files from the root staging directory to the show-specific subfolder
+            import shutil
             
             jobs = []
             for ep in self.selected_season.episodes:
+                filename = f"ep{ep.index_number:02d}.mpg"
+                dest_path = self.current_staging_dir / filename
+                src_path = self.config.staging_dir / filename
+                
+                if src_path.exists() and not dest_path.exists():
+                    try:
+                        shutil.move(src_path, dest_path)
+                        self._log(f"Migrated cached transcode for E{ep.index_number} to series folder")
+                    except Exception as e:
+                        logger.warning(f"Failed to migrate cached transcode: {e}")
+                
                 job = TranscodeJob(
                     input_path=self.jellyfin_client.get_stream_url(ep.id) if self.jellyfin_client else "",
-                    output_path=self.config.staging_dir / f"ep{ep.index_number:02d}.mpg",
+                    output_path=dest_path,
                     episode_name=ep.name,
                     episode_index=ep.index_number,
                     duration_seconds=ep.runtime_minutes * 60
@@ -952,97 +1128,306 @@ class JellyDiscApp(_BaseClass):
         video_standard = VideoStandard.NTSC if self.standard_var.get() == "NTSC" else VideoStandard.PAL
         menu_style = MenuStyle.MODERN if self.style_var.get() == "Modern" else MenuStyle.RETRO
         include_subs = self.subtitles_var.get()
+        include_trailer = self.trailer_var.get()
         
         # Initialize components
         transcoder = Transcoder(
-            self.config.staging_dir,
+            self.current_staging_dir,
             VideoSettings(video_standard)
         )
         
+        # Format title cleanly for movies
+        if getattr(self.selected_series, "type", "Series") == "Movie":
+            menu_title = self.selected_series.name
+        else:
+            menu_title = f"{self.selected_series.name} - {self.selected_season.name}"
+            
         menu_config = MenuConfig(
             style=menu_style,
-            title=f"{self.selected_series.name} - {self.selected_season.name}",
+            title=menu_title,
             season_overview=self.selected_season.overview or "",
-            include_subtitles=include_subs
+            include_subtitles=include_subs,
+            include_cast=True,
+            actors=getattr(self.selected_series, "actors", []),
+            include_trailer=include_trailer
         )
         
-        menu_builder = MenuBuilder(self.config.staging_dir, menu_config)
+        menu_builder = MenuBuilder(self.current_staging_dir, menu_config)
         burner = Burner(self.config.output_dir)
         
+        # --- Download assets from Jellyfin ---
+        self._update_task("Downloading Series assets...", 0)
+        
+        backdrop_path = None
+        if self.jellyfin_client and self.selected_series.backdrop_image_url:
+            self._log("Downloading series backdrop...")
+            try:
+                backdrop_path = self.config.assets_dir / "backdrop.jpg"
+                self.jellyfin_client.download_image(self.selected_series.backdrop_image_url, backdrop_path)
+            except Exception as e:
+                self._log(f"⚠️ Failed to download backdrop: {e}")
+                backdrop_path = None
+
+        logo_path = None
+        if self.jellyfin_client and self.selected_series.logo_image_url:
+            self._log("Downloading series logo...")
+            try:
+                logo_path = self.config.assets_dir / "logo.png"
+                self.jellyfin_client.download_image(self.selected_series.logo_image_url, logo_path)
+            except Exception as e:
+                self._log(f"⚠️ Failed to download logo: {e}")
+                logo_path = None
+
+        theme_path = None
+        if self.jellyfin_client:
+            try:
+                theme_url = self.jellyfin_client.get_theme_song_url(self.selected_series.id)
+                if theme_url:
+                    self._log("Downloading theme song loop...")
+                    theme_path = self.config.assets_dir / "theme.mp3"
+                    self.jellyfin_client.download_image(theme_url, theme_path)
+            except Exception as e:
+                self._log(f"⚠️ Failed to download theme song: {e}")
+                theme_path = None
+
+        # Download episode thumbnails
+        ep_thumbs = {}
+        if self.jellyfin_client and self.selected_season:
+            for ep in self.selected_season.episodes:
+                if ep.primary_image_url:
+                    self._log(f"Downloading E{ep.index_number} thumbnail...")
+                    try:
+                        t_path = self.config.assets_dir / f"ep_{ep.index_number}_thumb.jpg"
+                        self.jellyfin_client.download_image(ep.primary_image_url, t_path)
+                        ep_thumbs[ep.index_number] = t_path
+                    except Exception as e:
+                        self._log(f"⚠️ Failed to download thumbnail for E{ep.index_number}: {e}")
+
+        # Check and download/transcode series trailer
+        trailer_path = None
+        if include_trailer and self.jellyfin_client and self.selected_series:
+            self._log("Checking for local trailers on server...")
+            try:
+                trailers = self.jellyfin_client.get_local_trailers(self.selected_series.id)
+                if trailers:
+                    trailer_item = trailers[0]
+                    self._log(f"Found local trailer: {trailer_item.get('Name')}")
+                    trailer_path = self.current_staging_dir / "trailer.mpg"
+                    
+                    if trailer_path.exists() and trailer_path.stat().st_size > 2 * 1024 * 1024:
+                        self._log("✓ Trailer already transcoded. Skipping transcode.")
+                    else:
+                        temp_trailer_input = self.current_staging_dir / "temp_trailer_input.tmp"
+                        try:
+                            self._log("Downloading trailer from server...")
+                            stream_url = self.jellyfin_client.get_stream_url(trailer_item["Id"])
+                            response = self.jellyfin_client.session.get(stream_url, stream=True, timeout=30)
+                            response.raise_for_status()
+                            
+                            total_bytes = int(response.headers.get('content-length', 0))
+                            downloaded = 0
+                            
+                            with open(temp_trailer_input, 'wb') as f:
+                                for chunk in response.iter_content(chunk_size=65536):
+                                    if chunk:
+                                        f.write(chunk)
+                                        downloaded += len(chunk)
+                                        if total_bytes > 0:
+                                            pct = downloaded / total_bytes
+                                            self.after(0, lambda p=pct: self.task_progress.set(p * 0.3))
+                                            self._update_task(
+                                                f"Downloading Trailer ({pct * 100:.1f}%)",
+                                                pct * 0.3
+                                            )
+                            
+                            self._log("Finished downloading trailer. Transcoding...")
+                            
+                            def trailer_transcode_progress(progress: float):
+                                self.after(0, lambda p=progress: self.task_progress.set(0.3 + p * 0.7))
+                            
+                            transcoder.transcode(
+                                str(temp_trailer_input),
+                                trailer_path,
+                                progress_callback=trailer_transcode_progress,
+                                extract_subs=False
+                            )
+                            self._log("✓ Trailer transcode completed.")
+                        except Exception as e:
+                            self._log(f"⚠️ Trailer transcode failed: {e}")
+                            trailer_path = None
+                        finally:
+                            if temp_trailer_input.exists():
+                                try:
+                                    temp_trailer_input.unlink()
+                                except Exception:
+                                    pass
+                else:
+                    self._log("No local trailers found on server for this item.")
+            except Exception as e:
+                self._log(f"⚠️ Failed to retrieve/process trailer: {e}")
+                trailer_path = None
+
         iso_files = []
         
         for disc_plan in self.disc_plans:
             disc_num = disc_plan.disc_number
             self._log(f"\n=== Processing Disc {disc_num} of {len(self.disc_plans)} ===")
             
+            # Calculate optimal bitrate for this specific disc
+            disc_bitrate = transcoder.calculate_optimal_bitrate(disc_plan.total_minutes)
+            
             # Step 1: Transcode episodes
-            self._update_task(f"Disc {disc_num}: Transcoding episodes...", 0)
+            self._update_task(f"Disc {disc_num}: Transcoding episodes...", 0.7)
             
             total_episodes = len(disc_plan.episodes)
             transcoded_files = []
             
             for i, job in enumerate(disc_plan.episodes):
                 self._update_task(
-                    f"Disc {disc_num}: Transcoding E{job.episode_index} ({i+1}/{total_episodes})",
+                    f"Disc {disc_num}: Processing E{job.episode_index} ({i+1}/{total_episodes})",
                     i / total_episodes
                 )
-                self._log(f"Transcoding: {job.episode_name}")
                 
-                def transcode_progress(progress: float):
-                    self.after(0, lambda p=progress: self.task_progress.set(
-                        (i + p) / total_episodes
-                    ))
+                if job.output_path.exists() and job.output_path.stat().st_size > 10 * 1024 * 1024:
+                    self._log(f"✓ E{job.episode_index} already transcoded. Skipping download and transcode.")
+                    transcoded_files.append(job.output_path)
+                    continue
+                
+                temp_input_path = self.current_staging_dir / f"temp_input_{job.episode_index}.tmp"
                 
                 try:
+                    self._log(f"Downloading E{job.episode_index} from server...")
+                    
+                    # Stream download with progress updates
+                    response = self.jellyfin_client.session.get(job.input_path, stream=True, timeout=30)
+                    response.raise_for_status()
+                    
+                    total_bytes = int(response.headers.get('content-length', 0))
+                    downloaded = 0
+                    
+                    with open(temp_input_path, 'wb') as f:
+                        for chunk in response.iter_content(chunk_size=65536):
+                            if chunk:
+                                f.write(chunk)
+                                downloaded += len(chunk)
+                                if total_bytes > 0:
+                                    pct = downloaded / total_bytes
+                                    self.after(0, lambda p=pct: self.task_progress.set(p * 0.3))
+                                    self._update_task(
+                                        f"Disc {disc_num}: Downloading E{job.episode_index} ({pct * 100:.1f}%)",
+                                        (i + pct * 0.3) / total_episodes
+                                    )
+                                    
+                    self._log(f"Finished downloading E{job.episode_index}. Transcoding locally...")
+                    
+                    def transcode_progress(progress: float):
+                        self.after(0, lambda p=progress: self.task_progress.set(
+                            0.3 + p * 0.7
+                        ))
+                        self.after(0, lambda p=progress: self.overall_progress.set(
+                            (i + 0.3 + p * 0.7) / total_episodes
+                        ))
+                    
                     transcoder.transcode(
-                        job.input_path,
+                        str(temp_input_path),
                         job.output_path,
+                        video_bitrate=disc_bitrate,
                         progress_callback=transcode_progress,
                         extract_subs=include_subs
                     )
                     transcoded_files.append(job.output_path)
+                    self._log(f"✓ E{job.episode_index} completed.")
+                    
                 except Exception as e:
                     self._log(f"⚠️ Transcode failed for {job.episode_name}: {e}")
+                finally:
+                    # Clean up temporary local download immediately
+                    if temp_input_path.exists():
+                        try:
+                            temp_input_path.unlink()
+                        except Exception:
+                            pass
             
-            # Step 2: Generate menus
-            self._update_task(f"Disc {disc_num}: Generating menus...", 0.5)
-            self._log("Generating DVD menus...")
+            # Determine if trailer is included on this disc (only on Disc 1)
+            disc_trailer_path = trailer_path if disc_plan.disc_number == 1 else None
+            has_trailer = (disc_trailer_path is not None)
+            show_ep_select = len(disc_plan.episodes) > 1
             
-            episodes = [
-                EpisodeThumbnail(
-                    episode_index=job.episode_index,
-                    title=job.episode_name
+            # Step 2: Generate Main Menu
+            self._update_task(f"Disc {disc_num}: Generating Main Menu...", 0.5)
+            self._log("Generating Main Menu...")
+            m_bg, m_hl, m_sel, m_btns = menu_builder.generate_main_menu(
+                backdrop_path, logo_path, has_trailer=has_trailer, show_episode_select=show_ep_select
+            )
+            m_base_vid = menu_builder.generate_menu_video(m_bg, "menu_main_base.mpg", theme_path)
+            menu_main_vid = menu_builder.compile_interactive_menu(
+                m_base_vid, m_hl, m_sel, m_btns, menu_builder.output_dir / "menu_main.mpg"
+            )
+            
+            # Step 3.5: Generate Cast & Info Menu (Optional)
+            menu_cast_vid = None
+            if menu_config.include_cast:
+                self._update_task(f"Disc {disc_num}: Generating Cast Menu...", 0.55)
+                self._log("Generating Cast & Info Menu...")
+                c_bg, c_hl, c_sel, c_btns = menu_builder.generate_cast_menu(
+                    backdrop_path,
+                    logo_path,
+                    overview=self.selected_series.overview or "",
+                    actors=menu_config.actors
                 )
-                for job in disc_plan.episodes
-            ]
+                c_base_vid = menu_builder.generate_menu_video(c_bg, "menu_cast_base.mpg")
+                menu_cast_vid = menu_builder.compile_interactive_menu(
+                    c_base_vid, c_hl, c_sel, c_btns, menu_builder.output_dir / "menu_cast.mpg"
+                )
             
-            bg_path = menu_builder.generate_menu_background(episodes=episodes)
-            hl_path = menu_builder.generate_highlight_mask(episodes)
-            sel_path = menu_builder.generate_select_mask(episodes)
+            # Step 4: Generate Episode Sub-Menus (paginated, 6 per page) - Only if we have multiple episodes
+            menu_episode_vids = []
+            if show_ep_select:
+                self._update_task(f"Disc {disc_num}: Generating Episode Menus...", 0.6)
+                self._log("Generating Episode selection menus...")
+                
+                episodes_thumbs_list = []
+                for job in disc_plan.episodes:
+                    t_path = ep_thumbs.get(job.episode_index)
+                    ep_thumb = EpisodeThumbnail(
+                        episode_index=job.episode_index,
+                        title=job.episode_name,
+                        thumbnail_path=t_path
+                    )
+                    episodes_thumbs_list.append(ep_thumb)
+                    
+                total_pages = (len(episodes_thumbs_list) + 5) // 6
+                
+                for p_idx in range(total_pages):
+                    self._update_task(f"Disc {disc_num}: Generating Episode Menu Page {p_idx+1}/{total_pages}...", 0.6 + (p_idx / total_pages) * 0.1)
+                    self._log(f"Generating Episode Selection Menu (Page {p_idx+1}/{total_pages})...")
+                    ep_bg, ep_hl, ep_sel, ep_btns = menu_builder.generate_episode_menu(
+                        backdrop_path, logo_path, episodes_thumbs_list, p_idx, total_pages
+                    )
+                    ep_base_vid = menu_builder.generate_menu_video(ep_bg, f"menu_episodes_base_{p_idx+1}.mpg")
+                    ep_vid = menu_builder.compile_interactive_menu(
+                        ep_base_vid, ep_hl, ep_sel, ep_btns, menu_builder.output_dir / f"menu_episodes_{p_idx+1}.mpg"
+                    )
+                    menu_episode_vids.append(ep_vid)
             
-            # Step 3: Generate menu video
-            self._update_task(f"Disc {disc_num}: Creating menu video...", 0.6)
-            self._log("Creating menu video...")
-            
-            menu_video = menu_builder.generate_menu_video(bg_path)
-            
-            # Step 4: Generate dvdauthor XML
-            self._update_task(f"Disc {disc_num}: Building DVD structure...", 0.7)
+            # Step 5: Generate dvdauthor XML
+            self._update_task(f"Disc {disc_num}: Building DVD structure...", 0.75)
             self._log("Building DVD structure...")
             
             xml_path = menu_builder.generate_dvdauthor_xml(
                 transcoded_files,
-                menu_video,
-                hl_path,
-                sel_path
+                menu_main_vid,
+                menu_episode_vids,
+                menu_cast_path=menu_cast_vid,
+                menu_trailer_path=disc_trailer_path
             )
             
-            # Step 5: Build DVD structure
+            # Step 6: Build DVD structure
             try:
                 dvd_dir = menu_builder.build_dvd_structure(xml_path)
             except Exception as e:
-                self._log(f"⚠️ DVD structure build skipped (dvdauthor not available): {e}")
-                dvd_dir = self.config.staging_dir
+                self._log(f"⚠️ DVD structure build skipped (dvdauthor failed or not available): {e}")
+                dvd_dir = self.current_staging_dir
             
             # Step 6: Create ISO
             self._update_task(f"Disc {disc_num}: Creating ISO...", 0.8)

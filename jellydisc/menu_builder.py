@@ -10,12 +10,10 @@ import logging
 import shutil
 import subprocess
 import textwrap
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Optional, Callable
-from io import BytesIO
-
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 logger = logging.getLogger(__name__)
@@ -35,16 +33,20 @@ class MenuConfig:
     season_overview: str = ""
     audio_loop_path: Optional[Path] = None
     include_subtitles: bool = True
+    include_cast: bool = True
+    actors: list[str] = field(default_factory=list)
+    include_trailer: bool = False
     
-    # Grid layout settings
-    thumbnail_width: int = 160
-    thumbnail_height: int = 90
+    # Grid layout settings in 16:9 design space (853x480)
+    thumbnail_width: int = 180
+    thumbnail_height: int = 101
     grid_columns: int = 3
-    grid_padding: int = 20
+    grid_padding: int = 40
     
     # Colors (RGBA)
     background_color: tuple = (20, 20, 30, 255)
     highlight_color: tuple = (255, 215, 0, 255)  # Gold
+    select_color: tuple = (255, 255, 255, 255)    # White
     text_color: tuple = (255, 255, 255, 255)
     subtitle_color: tuple = (200, 200, 200, 255)
 
@@ -73,27 +75,24 @@ class MenuBuilder:
     Generates commercial-grade DVD menus with episode thumbnail grids,
     highlight masks, and dvdauthor configuration.
     
-    Features:
-    - Grid layout of episode thumbnails
-    - Interactive highlight masks for DVD remote navigation
-    - Season overview text display
-    - Theme song audio loop
-    - Modern/Retro visual styles
+    Uses a 16:9 square-pixel design space (853x480) internally, downscaling 
+    to NTSC anamorphic (720x480) before saving to correct Pixel Aspect Ratio (PAR) 
+    distortion on TVs.
     """
     
-    # DVD menu resolution (NTSC)
+    # Square-pixel design resolution (16:9)
+    DESIGN_WIDTH = 853
+    DESIGN_HEIGHT = 480
+    
+    # Final coded resolution (NTSC anamorphic)
     MENU_WIDTH = 720
     MENU_HEIGHT = 480
     
-    # Safe area margins (TV overscan)
-    SAFE_MARGIN_X = 36
-    SAFE_MARGIN_Y = 24
+    # Safe area margins (TV overscan, relative to 853x480 design space)
+    SAFE_MARGIN_X = 50
+    SAFE_MARGIN_Y = 30
     
-    def __init__(
-        self,
-        output_dir: Path,
-        config: Optional[MenuConfig] = None
-    ):
+    def __init__(self, output_dir: Path, config: Optional[MenuConfig] = None):
         """
         Initialize the menu builder.
         
@@ -103,26 +102,44 @@ class MenuBuilder:
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        
         self.config = config or MenuConfig()
-        
-        # Try to find a font
         self._font_path = self._find_font()
     
     def _find_font(self) -> Optional[str]:
         """Find a suitable font for text rendering."""
+        # 1. Check local project assets folder first
+        local_font_path = Path(__file__).resolve().parent.parent / "assets" / "font.ttf"
+        if local_font_path.exists():
+            return str(local_font_path)
+            
         font_paths = [
+            "/System/Library/Fonts/Supplemental/HelveticaNeue-Bold.ttf",
+            "/System/Library/Fonts/Helvetica.ttc",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
             "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
-            "/System/Library/Fonts/Helvetica.ttc",
+            "C:\\Windows\\Fonts\\arialbd.ttf",
             "C:\\Windows\\Fonts\\arial.ttf",
             "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
         ]
         
+        # 2. Check system paths
         for path in font_paths:
             if Path(path).exists():
                 return path
-        
+                
+        # 3. Download open-source font from Google Font repo as fallback
+        try:
+            import requests
+            font_url = "https://github.com/google/fonts/raw/main/apache/robotocondensed/RobotoCondensed-Bold.ttf"
+            logger.info("Downloading RobotoCondensed-Bold.ttf font fallback to assets/font.ttf...")
+            local_font_path.parent.mkdir(parents=True, exist_ok=True)
+            r = requests.get(font_url, timeout=15)
+            r.raise_for_status()
+            local_font_path.write_bytes(r.content)
+            return str(local_font_path)
+        except Exception as e:
+            logger.warning(f"Failed to download fallback font: {e}")
+            
         return None
     
     def _get_font(self, size: int) -> ImageFont.FreeTypeFont:
@@ -132,9 +149,21 @@ class MenuBuilder:
                 return ImageFont.truetype(self._font_path, size)
         except Exception:
             pass
-        
-        # Fallback to default
         return ImageFont.load_default()
+    
+    def _scale_x_to_coded(self, x: float) -> int:
+        """Scale an x-coordinate from 853 design space to 720 coded space."""
+        return int(x * self.MENU_WIDTH / self.DESIGN_WIDTH)
+    
+    def _scale_box_to_coded(self, box: tuple[float, float, float, float]) -> tuple[int, int, int, int]:
+        """Scale a bounding box (x0, y0, x1, y1) to 720x480 coded space."""
+        x0, y0, x1, y1 = box
+        return (
+            self._scale_x_to_coded(x0),
+            int(y0),
+            self._scale_x_to_coded(x1),
+            int(y1)
+        )
     
     def _apply_style(self, image: Image.Image) -> Image.Image:
         """Apply visual style effects to the menu background."""
@@ -142,326 +171,462 @@ class MenuBuilder:
             # Add scanlines effect for retro look
             overlay = Image.new('RGBA', image.size, (0, 0, 0, 0))
             draw = ImageDraw.Draw(overlay)
-            
             for y in range(0, image.height, 2):
                 draw.line([(0, y), (image.width, y)], fill=(0, 0, 0, 80), width=1)
-            
             image = Image.alpha_composite(image.convert('RGBA'), overlay)
-            
-            # Add slight blur
             image = image.filter(ImageFilter.GaussianBlur(radius=0.5))
         else:
-            # Modern style - add subtle vignette
+            # Modern style - add subtle radial vignette
             overlay = Image.new('RGBA', image.size, (0, 0, 0, 0))
             draw = ImageDraw.Draw(overlay)
-            
-            # Create radial gradient vignette
             cx, cy = image.width // 2, image.height // 2
             max_dist = (cx ** 2 + cy ** 2) ** 0.5
             
-            for y in range(image.height):
-                for x in range(0, image.width, 4):  # Sample every 4 pixels for speed
-                    dist = ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5
-                    alpha = int(min(80, (dist / max_dist) * 100))
-                    draw.rectangle([x, y, x + 4, y + 1], fill=(0, 0, 0, alpha))
-            
+            # Fast radial gradient: draw concentric circles outwards
+            for r in range(0, int(max_dist), 8):
+                alpha = int(min(120, (r / max_dist) * 150))
+                # Draw circles with thick strokes
+                draw.ellipse(
+                    [cx - r, cy - r, cx + r, cy + r],
+                    outline=(0, 0, 0, alpha),
+                    width=8
+                )
             image = Image.alpha_composite(image.convert('RGBA'), overlay)
-        
         return image
     
-    def generate_menu_background(
+    def _load_backdrop(self, backdrop_path: Optional[Path]) -> Image.Image:
+        """Load and prepare the background backdrop image."""
+        if backdrop_path and backdrop_path.exists():
+            backdrop = Image.open(backdrop_path)
+            backdrop = backdrop.resize((self.DESIGN_WIDTH, self.DESIGN_HEIGHT), Image.Resampling.LANCZOS)
+            # Darken backdrop to ensure text readability
+            backdrop = Image.blend(
+                backdrop.convert('RGBA'),
+                Image.new('RGBA', backdrop.size, (15, 15, 25, 255)),
+                0.65
+            )
+            return backdrop
+        return Image.new('RGBA', (self.DESIGN_WIDTH, self.DESIGN_HEIGHT), self.config.background_color)
+    
+    def _draw_menu_header(self, image: Image.Image, draw: ImageDraw.ImageDraw, logo_path: Optional[Path]) -> int:
+        """Draw the series logo or title text. Returns the ending Y coordinate."""
+        title_y = self.SAFE_MARGIN_Y
+        if logo_path and logo_path.exists():
+            try:
+                logo = Image.open(logo_path).convert('RGBA')
+                max_w = self.DESIGN_WIDTH - 2 * self.SAFE_MARGIN_X
+                logo.thumbnail((max_w, 65), Image.Resampling.LANCZOS)
+                logo_x = (self.DESIGN_WIDTH - logo.width) // 2
+                image.paste(logo, (logo_x, title_y), logo)
+                return title_y + logo.height + 15
+            except Exception as e:
+                logger.error(f"Error drawing logo: {e}")
+        
+        # Fallback to text title
+        font = self._get_font(36)
+        bbox = draw.textbbox((0, 0), self.config.title, font=font)
+        w = bbox[2] - bbox[0]
+        x = (self.DESIGN_WIDTH - w) // 2
+        draw.text((x, title_y), self.config.title, fill=self.config.text_color, font=font)
+        return title_y + (bbox[3] - bbox[1]) + 15
+
+    def _draw_text_button(
+        self,
+        draw: ImageDraw.ImageDraw,
+        text: str,
+        cx: int,
+        cy: int,
+        font: ImageFont.FreeTypeFont,
+        color: tuple,
+        mask_draws: list[ImageDraw.ImageDraw] = None,
+        padding: int = 15
+    ) -> tuple[int, int, int, int]:
+        """Draw a text button and return its design-space bounding box."""
+        bbox = draw.textbbox((0, 0), text, font=font)
+        w = bbox[2] - bbox[0]
+        h = bbox[3] - bbox[1]
+        x0 = cx - w // 2
+        y0 = cy - h // 2
+        x1 = x0 + w
+        y1 = y0 + h
+        
+        # Draw on background
+        draw.text((x0, y0), text, fill=color, font=font)
+        
+        # Define button boundaries (with padding)
+        btn_box = (x0 - padding, y0 - padding // 2, x1 + padding, y1 + padding // 2)
+        
+        # Draw highlight/select borders if draws list provided
+        if mask_draws:
+            hl_draw, sel_draw = mask_draws
+            # Draw outlines on highlights (using solid colors for spumux)
+            hl_draw.rectangle(btn_box, outline=self.config.highlight_color, width=3)
+            sel_draw.rectangle(btn_box, outline=self.config.select_color, width=4)
+            
+        return btn_box
+
+    def generate_main_menu(
         self,
         backdrop_path: Optional[Path] = None,
         logo_path: Optional[Path] = None,
-        episodes: Optional[list[EpisodeThumbnail]] = None
-    ) -> Path:
+        has_trailer: bool = False,
+        show_episode_select: bool = True
+    ) -> tuple[Path, Path, Path, list[tuple[int, int, int, int]]]:
         """
-        Generate the main menu background image with episode thumbnail grid.
+        Generate the Main Menu background and highlight masks.
         
-        Args:
-            backdrop_path: Path to series backdrop image
-            logo_path: Path to series logo image
-            episodes: List of episode thumbnails to display
-            
         Returns:
-            Path to generated menu background PNG
+            Tuple of (bg_path, highlight_path, select_path, coded_button_bounds)
         """
-        # Create base image
-        if backdrop_path and backdrop_path.exists():
-            backdrop = Image.open(backdrop_path)
-            backdrop = backdrop.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.LANCZOS)
-            # Darken for better contrast
-            backdrop = Image.blend(
-                backdrop.convert('RGBA'),
-                Image.new('RGBA', backdrop.size, (0, 0, 0, 180)),
-                0.6
-            )
-            image = backdrop
-        else:
-            image = Image.new('RGBA', (self.MENU_WIDTH, self.MENU_HEIGHT), self.config.background_color)
+        bg_image = self._load_backdrop(backdrop_path)
+        draw = ImageDraw.Draw(bg_image)
+        bg_image = self._apply_style(bg_image)
+        draw = ImageDraw.Draw(bg_image)
         
-        draw = ImageDraw.Draw(image)
+        # Create pure black backgrounds for spumux compatibility (black is transparent)
+        hl_image = Image.new('RGB', (self.DESIGN_WIDTH, self.DESIGN_HEIGHT), (0, 0, 0))
+        sel_image = Image.new('RGB', (self.DESIGN_WIDTH, self.DESIGN_HEIGHT), (0, 0, 0))
+        hl_draw = ImageDraw.Draw(hl_image)
+        sel_draw = ImageDraw.Draw(sel_image)
         
-        # Apply style
-        image = self._apply_style(image)
-        draw = ImageDraw.Draw(image)
+        # Draw Header
+        header_end_y = self._draw_menu_header(bg_image, draw, logo_path)
         
-        # Add logo or title at top
-        title_y = self.SAFE_MARGIN_Y
-        
-        if logo_path and logo_path.exists():
-            logo = Image.open(logo_path).convert('RGBA')
-            # Scale logo to fit
-            max_logo_width = self.MENU_WIDTH - 2 * self.SAFE_MARGIN_X
-            max_logo_height = 80
-            logo.thumbnail((max_logo_width, max_logo_height), Image.Resampling.LANCZOS)
+        # Build button labels dynamically based on availability
+        button_labels = ["PLAY ALL"]
+        if show_episode_select:
+            button_labels.append("EPISODE SELECT")
+        if self.config.include_cast:
+            button_labels.append("CAST & INFO")
+        if has_trailer:
+            button_labels.append("PLAY TRAILER")
             
-            logo_x = (self.MENU_WIDTH - logo.width) // 2
-            image.paste(logo, (logo_x, title_y), logo)
-            title_y += logo.height + 10
-        else:
-            # Draw text title
-            title_font = self._get_font(32)
-            title_bbox = draw.textbbox((0, 0), self.config.title, font=title_font)
-            title_width = title_bbox[2] - title_bbox[0]
-            title_x = (self.MENU_WIDTH - title_width) // 2
-            draw.text((title_x, title_y), self.config.title, fill=self.config.text_color, font=title_font)
-            title_y += 40
+        # Setup buttons layout
+        btn_font = self._get_font(24)
+        center_x = self.DESIGN_WIDTH // 2
         
-        # Draw episode thumbnail grid
-        if episodes:
-            grid_start_y = title_y + 20
-            self._draw_episode_grid(image, draw, episodes, grid_start_y)
+        num_buttons = len(button_labels)
+        if num_buttons == 2:
+            gap = 80
+            start_y = header_end_y + 80
+        elif num_buttons == 3:
+            gap = 60
+            start_y = header_end_y + 55
+        else: # 4 buttons
+            gap = 50
+            start_y = header_end_y + 35
+            
+        buttons_design = []
+        mask_draws = [hl_draw, sel_draw]
         
-        # Add season overview at bottom
-        if self.config.season_overview:
-            overview_y = self.MENU_HEIGHT - self.SAFE_MARGIN_Y - 60
-            self._draw_overview(draw, overview_y)
+        for idx, label in enumerate(button_labels):
+            y_pos = start_y + idx * gap
+            box = self._draw_text_button(draw, label, center_x, y_pos, btn_font, self.config.text_color, mask_draws)
+            buttons_design.append(box)
         
-        # Save the menu background
-        output_path = self.output_dir / "menu_background.png"
-        image.save(output_path, "PNG")
+        # Downscale images to coded DVD resolution (720x480)
+        final_bg = bg_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.LANCZOS)
+        final_hl = hl_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.NEAREST)
+        final_sel = sel_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.NEAREST)
         
-        logger.info(f"Generated menu background: {output_path}")
-        return output_path
-    
-    def _draw_episode_grid(
+        # Save assets
+        bg_path = self.output_dir / "menu_main_bg.png"
+        hl_path = self.output_dir / "menu_main_highlight.png"
+        sel_path = self.output_dir / "menu_main_select.png"
+        
+        final_bg.save(bg_path, "PNG")
+        final_hl.save(hl_path, "PNG")
+        final_sel.save(sel_path, "PNG")
+        
+        # Convert design-space coordinates to coded 720x480 coordinates
+        coded_bounds = [self._scale_box_to_coded(box) for box in buttons_design]
+        
+        return bg_path, hl_path, sel_path, coded_bounds
+
+    def generate_setup_menu(
         self,
-        image: Image.Image,
-        draw: ImageDraw.ImageDraw,
-        episodes: list[EpisodeThumbnail],
-        start_y: int
-    ) -> list[tuple[int, int, int, int]]:
+        backdrop_path: Optional[Path] = None,
+        logo_path: Optional[Path] = None
+    ) -> tuple[Path, Path, Path, list[tuple[int, int, int, int]]]:
         """
-        Draw episode thumbnails in a grid layout.
-        
-        Returns list of button bounding boxes for highlight mask generation.
+        Generate the Setup Menu (toggle subtitles on/off).
         """
-        button_bounds = []
+        bg_image = self._load_backdrop(backdrop_path)
+        draw = ImageDraw.Draw(bg_image)
+        bg_image = self._apply_style(bg_image)
+        draw = ImageDraw.Draw(bg_image)
         
+        hl_image = Image.new('RGB', (self.DESIGN_WIDTH, self.DESIGN_HEIGHT), (0, 0, 0))
+        sel_image = Image.new('RGB', (self.DESIGN_WIDTH, self.DESIGN_HEIGHT), (0, 0, 0))
+        hl_draw = ImageDraw.Draw(hl_image)
+        sel_draw = ImageDraw.Draw(sel_image)
+        
+        header_end_y = self._draw_menu_header(bg_image, draw, logo_path)
+        
+        # Setup Title
+        font_setup = self._get_font(22)
+        setup_bbox = draw.textbbox((0, 0), "SUBTITLES SETUP", font=font_setup)
+        setup_w = setup_bbox[2] - setup_bbox[0]
+        draw.text(((self.DESIGN_WIDTH - setup_w) // 2, header_end_y + 10), "SUBTITLES SETUP", fill=self.config.subtitle_color, font=font_setup)
+        
+        btn_font = self._get_font(20)
+        mask_draws = [hl_draw, sel_draw]
+        buttons_design = []
+        
+        # Button 1: SUBTITLES ON
+        box1 = self._draw_text_button(draw, "SUBTITLES ON", 300, header_end_y + 100, btn_font, self.config.text_color, mask_draws)
+        buttons_design.append(box1)
+        
+        # Button 2: SUBTITLES OFF
+        box2 = self._draw_text_button(draw, "SUBTITLES OFF", 553, header_end_y + 100, btn_font, self.config.text_color, mask_draws)
+        buttons_design.append(box2)
+        
+        # Button 3: BACK
+        box3 = self._draw_text_button(draw, "BACK TO MAIN", self.DESIGN_WIDTH // 2, header_end_y + 190, btn_font, self.config.subtitle_color, mask_draws)
+        buttons_design.append(box3)
+        
+        # Downscale and save
+        final_bg = bg_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.LANCZOS)
+        final_hl = hl_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.NEAREST)
+        final_sel = sel_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.NEAREST)
+        
+        bg_path = self.output_dir / "menu_setup_bg.png"
+        hl_path = self.output_dir / "menu_setup_highlight.png"
+        sel_path = self.output_dir / "menu_setup_select.png"
+        
+        final_bg.save(bg_path, "PNG")
+        final_hl.save(hl_path, "PNG")
+        final_sel.save(sel_path, "PNG")
+        
+        coded_bounds = [self._scale_box_to_coded(box) for box in buttons_design]
+        return bg_path, hl_path, sel_path, coded_bounds
+
+    def generate_cast_menu(
+        self,
+        backdrop_path: Optional[Path] = None,
+        logo_path: Optional[Path] = None,
+        overview: str = "",
+        actors: list[str] = None
+    ) -> tuple[Path, Path, Path, list[tuple[int, int, int, int]]]:
+        """
+        Generate the Cast & Show Info Menu background and highlights.
+        """
+        bg_image = self._load_backdrop(backdrop_path)
+        draw = ImageDraw.Draw(bg_image)
+        bg_image = self._apply_style(bg_image)
+        draw = ImageDraw.Draw(bg_image)
+        
+        hl_image = Image.new('RGB', (self.DESIGN_WIDTH, self.DESIGN_HEIGHT), (0, 0, 0))
+        sel_image = Image.new('RGB', (self.DESIGN_WIDTH, self.DESIGN_HEIGHT), (0, 0, 0))
+        hl_draw = ImageDraw.Draw(hl_image)
+        sel_draw = ImageDraw.Draw(sel_image)
+        
+        header_end_y = self._draw_menu_header(bg_image, draw, logo_path)
+        
+        # Cast Title Subtext
+        font_sub = self._get_font(20)
+        sub_text = "CAST & SHOW INFO"
+        sub_bbox = draw.textbbox((0, 0), sub_text, font=font_sub)
+        sub_x = (self.DESIGN_WIDTH - (sub_bbox[2] - sub_bbox[0])) // 2
+        draw.text((sub_x, header_end_y + 5), sub_text, fill=self.config.subtitle_color, font=font_sub)
+        
+        content_y = header_end_y + 50
+        
+        # Draw Summary column (Left side)
+        summary_title_font = self._get_font(16)
+        draw.text((self.SAFE_MARGIN_X, content_y), "SHOW SUMMARY", fill=self.config.subtitle_color, font=summary_title_font)
+        
+        summary_font = self._get_font(11)
+        summary_text = overview or "No show summary available."
+        # Wrap summary text (approx 45 chars per line)
+        wrapped_summary = textwrap.fill(summary_text, width=45)
+        # Limit lines to prevent vertical overflow
+        lines = wrapped_summary.split("\n")
+        if len(lines) > 13:
+            wrapped_summary = "\n".join(lines[:12]) + "\n..."
+        draw.text((self.SAFE_MARGIN_X, content_y + 25), wrapped_summary, fill=self.config.text_color, font=summary_font)
+        
+        # Draw Cast column (Right side)
+        cast_title_x = 480
+        draw.text((cast_title_x, content_y), "STARRING CAST", fill=self.config.subtitle_color, font=summary_title_font)
+        
+        cast_font = self._get_font(14)
+        actors_list = actors or self.config.actors
+        if not actors_list:
+            actors_list = ["Cast details not available."]
+            
+        cast_y = content_y + 25
+        for actor in actors_list[:7]:  # Limit to 7 actors to fit vertically
+            # Truncate long role descriptions to fit column
+            if len(actor) > 35:
+                actor = actor[:32] + "..."
+            draw.text((cast_title_x, cast_y), f"• {actor}", fill=self.config.text_color, font=cast_font)
+            cast_y += 26
+            
+        # Draw Back Button at the bottom
+        nav_y = 435
+        btn_font = self._get_font(18)
+        mask_draws = [hl_draw, sel_draw]
+        buttons_design = []
+        
+        box_back = self._draw_text_button(draw, "BACK TO MAIN", self.DESIGN_WIDTH // 2, nav_y, btn_font, self.config.subtitle_color, mask_draws)
+        buttons_design.append(box_back)
+        
+        # Downscale and save
+        final_bg = bg_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.LANCZOS)
+        final_hl = hl_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.NEAREST)
+        final_sel = sel_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.NEAREST)
+        
+        bg_path = self.output_dir / "menu_cast_bg.png"
+        hl_path = self.output_dir / "menu_cast_highlight.png"
+        sel_path = self.output_dir / "menu_cast_select.png"
+        
+        final_bg.save(bg_path, "PNG")
+        final_hl.save(hl_path, "PNG")
+        final_sel.save(sel_path, "PNG")
+        
+        coded_bounds = [self._scale_box_to_coded(box) for box in buttons_design]
+        return bg_path, hl_path, sel_path, coded_bounds
+
+    def generate_episode_menu(
+        self,
+        backdrop_path: Optional[Path] = None,
+        logo_path: Optional[Path] = None,
+        episodes: list[EpisodeThumbnail] = None,
+        page_index: int = 0,
+        total_pages: int = 1
+    ) -> tuple[Path, Path, Path, list[tuple[int, int, int, int]]]:
+        """
+        Generate paginated Episode Selection Menu backgrounds and highlights.
+        """
+        bg_image = self._load_backdrop(backdrop_path)
+        draw = ImageDraw.Draw(bg_image)
+        bg_image = self._apply_style(bg_image)
+        draw = ImageDraw.Draw(bg_image)
+        
+        hl_image = Image.new('RGB', (self.DESIGN_WIDTH, self.DESIGN_HEIGHT), (0, 0, 0))
+        sel_image = Image.new('RGB', (self.DESIGN_WIDTH, self.DESIGN_HEIGHT), (0, 0, 0))
+        hl_draw = ImageDraw.Draw(hl_image)
+        sel_draw = ImageDraw.Draw(sel_image)
+        
+        header_end_y = self._draw_menu_header(bg_image, draw, logo_path)
+        
+        # Page Title Subtext
+        font_sub = self._get_font(18)
+        sub_text = f"SELECT EPISODE - PAGE {page_index+1} OF {total_pages}"
+        sub_bbox = draw.textbbox((0, 0), sub_text, font=font_sub)
+        sub_x = (self.DESIGN_WIDTH - (sub_bbox[2] - sub_bbox[0])) // 2
+        draw.text((sub_x, header_end_y + 5), sub_text, fill=self.config.subtitle_color, font=font_sub)
+        
+        grid_start_y = header_end_y + 25
+        
+        # Grid parameters
         tw = self.config.thumbnail_width
         th = self.config.thumbnail_height
         padding = self.config.grid_padding
         cols = self.config.grid_columns
-        
-        # Calculate grid dimensions
-        grid_width = cols * tw + (cols - 1) * padding
-        start_x = (self.MENU_WIDTH - grid_width) // 2
+        grid_w = cols * tw + (cols - 1) * padding
+        start_x = (self.DESIGN_WIDTH - grid_w) // 2
         
         episode_font = self._get_font(12)
+        num_font = self._get_font(24)
         
-        for i, ep in enumerate(episodes[:6]):  # Max 6 episodes per menu page
+        buttons_design = []
+        
+        # Slice episodes for this page
+        page_episodes = episodes[page_index * 6 : (page_index + 1) * 6]
+        
+        for i, ep in enumerate(page_episodes):
             row = i // cols
             col = i % cols
             
             x = start_x + col * (tw + padding)
-            y = start_y + row * (th + padding + 20)  # Extra space for label
+            y = grid_start_y + row * 135
             
-            # Draw thumbnail placeholder or actual image
+            # Draw Thumbnail
             if ep.thumbnail_image:
                 thumb = ep.thumbnail_image.copy()
                 thumb = thumb.resize((tw, th), Image.Resampling.LANCZOS)
-                image.paste(thumb, (x, y))
+                bg_image.paste(thumb, (x, y))
             elif ep.thumbnail_path and ep.thumbnail_path.exists():
-                thumb = Image.open(ep.thumbnail_path)
-                thumb = thumb.resize((tw, th), Image.Resampling.LANCZOS)
-                image.paste(thumb, (x, y))
+                try:
+                    thumb = Image.open(ep.thumbnail_path)
+                    thumb = thumb.resize((tw, th), Image.Resampling.LANCZOS)
+                    bg_image.paste(thumb, (x, y))
+                except Exception:
+                    # Draw placeholder
+                    draw.rectangle([x, y, x + tw, y + th], fill=(50, 50, 70), outline=(100, 100, 120))
             else:
                 # Draw placeholder
-                draw.rectangle([x, y, x + tw, y + th], fill=(60, 60, 80), outline=(100, 100, 120))
-                # Draw episode number
-                num_font = self._get_font(24)
+                draw.rectangle([x, y, x + tw, y + th], fill=(50, 50, 70), outline=(100, 100, 120))
                 num_text = f"E{ep.episode_index}"
-                num_bbox = draw.textbbox((0, 0), num_text, font=num_font)
-                num_x = x + (tw - (num_bbox[2] - num_bbox[0])) // 2
-                num_y = y + (th - (num_bbox[3] - num_bbox[1])) // 2
-                draw.text((num_x, num_y), num_text, fill=(150, 150, 150), font=num_font)
+                n_bbox = draw.textbbox((0, 0), num_text, font=num_font)
+                nx = x + (tw - (n_bbox[2] - n_bbox[0])) // 2
+                ny = y + (th - (n_bbox[3] - n_bbox[1])) // 2
+                draw.text((nx, ny), num_text, fill=(150, 150, 150), font=num_font)
+                
+            # Draw episode label below
+            lbl = f"E{ep.episode_index}. {ep.title}"
+            if len(lbl) > 22:
+                lbl = lbl[:19] + "..."
+            l_bbox = draw.textbbox((0, 0), lbl, font=episode_font)
+            lx = x + (tw - (l_bbox[2] - l_bbox[0])) // 2
+            draw.text((lx, y + th + 2), lbl, fill=self.config.text_color, font=episode_font)
             
-            # Draw episode title below thumbnail
-            title_text = f"{ep.episode_index}. {ep.title}"
-            if len(title_text) > 20:
-                title_text = title_text[:17] + "..."
+            # The button bounds matches the thumbnail exactly
+            btn_box = (x, y, x + tw, y + th)
+            buttons_design.append(btn_box)
             
-            title_bbox = draw.textbbox((0, 0), title_text, font=episode_font)
-            title_width = title_bbox[2] - title_bbox[0]
-            title_x = x + (tw - title_width) // 2
-            title_y = y + th + 2
+            # Draw highlight outline on masks
+            hl_draw.rectangle(btn_box, outline=self.config.highlight_color, width=4)
+            sel_draw.rectangle(btn_box, outline=self.config.select_color, width=5)
             
-            draw.text((title_x, title_y), title_text, fill=self.config.text_color, font=episode_font)
+        # Draw navigation buttons at the bottom
+        nav_y = 435
+        nav_font = self._get_font(18)
+        mask_draws = [hl_draw, sel_draw]
+        
+        # Previous Page Button (if page > 0)
+        if page_index > 0:
+            box_prev = self._draw_text_button(draw, "PREV PAGE", 150, nav_y, nav_font, self.config.text_color, mask_draws)
+            buttons_design.append(box_prev)
             
-            # Store button bounds for highlight mask
-            button_bounds.append((x, y, x + tw, y + th))
+        # Back to Main Menu Button
+        box_main = self._draw_text_button(draw, "MAIN MENU", self.DESIGN_WIDTH // 2, nav_y, nav_font, self.config.subtitle_color, mask_draws)
+        buttons_design.append(box_main)
         
-        return button_bounds
-    
-    def _draw_overview(self, draw: ImageDraw.ImageDraw, y: int):
-        """Draw season overview text at the bottom of the menu."""
-        overview_font = self._get_font(11)
-        
-        # Wrap text to fit
-        max_width = self.MENU_WIDTH - 2 * self.SAFE_MARGIN_X
-        wrapped = textwrap.wrap(self.config.season_overview, width=80)
-        
-        # Only show first 2 lines
-        text = '\n'.join(wrapped[:2])
-        if len(wrapped) > 2:
-            text = text.rstrip() + "..."
-        
-        draw.multiline_text(
-            (self.SAFE_MARGIN_X, y),
-            text,
-            fill=self.config.subtitle_color,
-            font=overview_font,
-            spacing=2
-        )
-    
-    def generate_highlight_mask(
-        self,
-        episodes: list[EpisodeThumbnail],
-        start_y: int = 130
-    ) -> Path:
-        """
-        Generate the highlight/selection mask for DVD button navigation.
-        
-        The highlight mask is a 2-bit indexed image that defines the
-        "glow" effect when buttons are selected with a DVD remote.
-        
-        Args:
-            episodes: List of episodes (for button positions)
-            start_y: Y position where episode grid starts
+        # Next Page Button (if there are more pages)
+        if page_index < total_pages - 1:
+            box_next = self._draw_text_button(draw, "NEXT PAGE", 703, nav_y, nav_font, self.config.text_color, mask_draws)
+            buttons_design.append(box_next)
             
-        Returns:
-            Path to generated highlight mask PNG
-        """
-        # Create transparent image for highlights
-        image = Image.new('RGBA', (self.MENU_WIDTH, self.MENU_HEIGHT), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(image)
+        # Downscale and save
+        final_bg = bg_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.LANCZOS)
+        final_hl = hl_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.NEAREST)
+        final_sel = sel_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.NEAREST)
         
-        tw = self.config.thumbnail_width
-        th = self.config.thumbnail_height
-        padding = self.config.grid_padding
-        cols = self.config.grid_columns
+        bg_path = self.output_dir / f"menu_episodes_bg_{page_index+1}.png"
+        hl_path = self.output_dir / f"menu_episodes_highlight_{page_index+1}.png"
+        sel_path = self.output_dir / f"menu_episodes_select_{page_index+1}.png"
         
-        grid_width = cols * tw + (cols - 1) * padding
-        start_x = (self.MENU_WIDTH - grid_width) // 2
+        final_bg.save(bg_path, "PNG")
+        final_hl.save(hl_path, "PNG")
+        final_sel.save(sel_path, "PNG")
         
-        # Draw highlight frames around each episode thumbnail
-        for i, ep in enumerate(episodes[:6]):
-            row = i // cols
-            col = i % cols
-            
-            x = start_x + col * (tw + padding)
-            y = start_y + row * (th + padding + 20)
-            
-            # Draw highlight frame
-            frame_width = 4
-            highlight_color = self.config.highlight_color
-            
-            # Outer glow
-            draw.rectangle(
-                [x - frame_width, y - frame_width, x + tw + frame_width, y + th + frame_width],
-                outline=highlight_color,
-                width=frame_width
-            )
-        
-        # Save highlight mask
-        output_path = self.output_dir / "menu_highlight.png"
-        image.save(output_path, "PNG")
-        
-        logger.info(f"Generated highlight mask: {output_path}")
-        return output_path
-    
-    def generate_select_mask(
-        self,
-        episodes: list[EpisodeThumbnail],
-        start_y: int = 130
-    ) -> Path:
-        """
-        Generate the selection mask for DVD button press feedback.
-        
-        Args:
-            episodes: List of episodes (for button positions)
-            start_y: Y position where episode grid starts
-            
-        Returns:
-            Path to generated select mask PNG
-        """
-        # Create transparent image for selection
-        image = Image.new('RGBA', (self.MENU_WIDTH, self.MENU_HEIGHT), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(image)
-        
-        tw = self.config.thumbnail_width
-        th = self.config.thumbnail_height
-        padding = self.config.grid_padding
-        cols = self.config.grid_columns
-        
-        grid_width = cols * tw + (cols - 1) * padding
-        start_x = (self.MENU_WIDTH - grid_width) // 2
-        
-        # Draw selection highlight (brighter than highlight)
-        select_color = (255, 255, 255, 255)
-        
-        for i, ep in enumerate(episodes[:6]):
-            row = i // cols
-            col = i % cols
-            
-            x = start_x + col * (tw + padding)
-            y = start_y + row * (th + padding + 20)
-            
-            # Draw selection frame (thicker)
-            frame_width = 6
-            draw.rectangle(
-                [x - frame_width, y - frame_width, x + tw + frame_width, y + th + frame_width],
-                outline=select_color,
-                width=frame_width
-            )
-        
-        # Save select mask
-        output_path = self.output_dir / "menu_select.png"
-        image.save(output_path, "PNG")
-        
-        logger.info(f"Generated select mask: {output_path}")
-        return output_path
-    
+        coded_bounds = [self._scale_box_to_coded(box) for box in buttons_design]
+        return bg_path, hl_path, sel_path, coded_bounds
+
     def generate_menu_video(
         self,
         background_path: Path,
+        output_filename: str,
         audio_path: Optional[Path] = None,
-        duration: int = 30
+        duration: int = 15
     ) -> Path:
         """
-        Generate a looping menu video with optional audio.
-        
-        Args:
-            background_path: Path to menu background image
-            audio_path: Path to theme song audio (optional)
-            duration: Duration of menu loop in seconds
-            
-        Returns:
-            Path to generated menu MPEG video
+        Generate a looping menu video from background PNG, with optional theme audio.
         """
-        output_path = self.output_dir / "menu.mpg"
-        
+        output_path = self.output_dir / output_filename
         ffmpeg_path = shutil.which("ffmpeg")
         if not ffmpeg_path:
             raise MenuBuilderError("FFmpeg not found")
@@ -478,12 +643,12 @@ class MenuBuilder:
             cmd.extend([
                 "-i", str(audio_path),
                 "-shortest",
-                "-af", f"afade=t=out:st={duration-2}:d=2",  # Fade out audio
+                "-af", f"afade=t=out:st={duration-2}:d=2",
             ])
-        
+            
         cmd.extend([
             "-c:v", "mpeg2video",
-            "-b:v", "5000k",
+            "-b:v", "6000k",
             "-maxrate", "8000k",
             "-bufsize", "2000k",
             "-s", f"{self.MENU_WIDTH}x{self.MENU_HEIGHT}",
@@ -497,121 +662,260 @@ class MenuBuilder:
             str(output_path)
         ])
         
-        logger.debug(f"Running: {' '.join(cmd)}")
-        
+        logger.debug(f"Running FFmpeg: {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=True, text=True)
-        
         if result.returncode != 0:
             raise MenuBuilderError(f"Failed to generate menu video: {result.stderr}")
-        
+            
         logger.info(f"Generated menu video: {output_path}")
         return output_path
-    
-    def generate_dvdauthor_xml(
+
+    def compile_interactive_menu(
         self,
-        video_files: list[Path],
         menu_video_path: Path,
         highlight_path: Path,
         select_path: Path,
+        buttons: list[tuple[int, int, int, int]],
+        output_path: Path
+    ) -> Path:
+        """
+        Runs spumux to multiplex highlight overlays directly into the menu video stream.
+        """
+        spumux_path = shutil.which("spumux")
+        if not spumux_path:
+            logger.warning("spumux not found. Highlight borders will be inactive.")
+            shutil.copy(menu_video_path, output_path)
+            return output_path
+            
+        spumux_xml = self.output_dir / f"spumux_{output_path.stem}.xml"
+        
+        buttons_xml = []
+        for i, btn in enumerate(buttons):
+            x0, y0, x1, y1 = btn
+            buttons_xml.append(f'      <button name="button{i+1}" x0="{x0}" y0="{y0}" x1="{x1}" y1="{y1}" />')
+            
+        xml_content = f'''<subpictures>
+  <stream>
+    <spu start="00:00:00.00" end="00:00:00.00"
+         image="{highlight_path}"
+         select="{select_path}"
+         transparent="000000"
+         force="yes">
+{chr(10).join(buttons_xml)}
+    </spu>
+  </stream>
+</subpictures>
+'''
+        spumux_xml.write_text(xml_content)
+        
+        cmd = [spumux_path, str(spumux_xml)]
+        logger.debug(f"Running spumux: {' '.join(cmd)}")
+        try:
+            with open(menu_video_path, 'rb') as stdin_file:
+                with open(output_path, 'wb') as stdout_file:
+                    result = subprocess.run(
+                        cmd,
+                        stdin=stdin_file,
+                        stdout=stdout_file,
+                        stderr=subprocess.PIPE,
+                        timeout=300
+                    )
+            if result.returncode != 0:
+                logger.error(f"spumux failed: {result.stderr.decode('utf-8', errors='ignore')}")
+                shutil.copy(menu_video_path, output_path)
+            else:
+                logger.info(f"Successfully multiplexed highlights into {output_path}")
+        except Exception as e:
+            logger.error(f"Failed to run spumux: {e}")
+            shutil.copy(menu_video_path, output_path)
+            
+        return output_path
+
+    def generate_dvdauthor_xml(
+        self,
+        video_files: list[Path],
+        menu_main_path: Path,
+        menu_episode_paths: list[Path],
+        menu_cast_path: Optional[Path] = None,
+        menu_trailer_path: Optional[Path] = None,
         output_path: Optional[Path] = None
     ) -> Path:
         """
-        Generate dvdauthor XML configuration for DVD structure.
-        
-        Args:
-            video_files: List of transcoded episode MPEG files
-            menu_video_path: Path to menu video
-            highlight_path: Path to highlight mask
-            select_path: Path to select mask
-            output_path: Output path for XML file
-            
-        Returns:
-            Path to generated XML file
+        Generate dvdauthor XML configuration with advanced VM state registers.
         """
         if output_path is None:
             output_path = self.output_dir / "dvdauthor.xml"
-        
-        # Generate button coordinates
-        tw = self.config.thumbnail_width
-        th = self.config.thumbnail_height
-        padding = self.config.grid_padding
-        cols = self.config.grid_columns
-        start_y = 130
-        
-        grid_width = cols * tw + (cols - 1) * padding
-        start_x = (self.MENU_WIDTH - grid_width) // 2
-        
-        buttons_xml = []
-        num_episodes = min(len(video_files), 6)
-        
-        for i in range(num_episodes):
-            row = i // cols
-            col = i % cols
             
-            x0 = start_x + col * (tw + padding)
-            y0 = start_y + row * (th + padding + 20)
-            x1 = x0 + tw
-            y1 = y0 + th
-            
-            # Navigation: up, down, left, right
-            up = i - cols if i >= cols else i
-            down = i + cols if i + cols < num_episodes else i
-            left = i - 1 if col > 0 else i
-            right = i + 1 if col < cols - 1 and i + 1 < num_episodes else i
-            
-            buttons_xml.append(f'''      <button name="button{i+1}" x0="{x0}" y0="{y0}" x1="{x1}" y1="{y1}"
-              up="button{up+1}" down="button{down+1}" left="button{left+1}" right="button{right+1}">
-        jump title {i+1};
-      </button>''')
+        # Build titleset menus PGCs
+        menu_pgcs = []
         
-        # Build video list for titleset
-        vob_entries = []
+        # PGC indexes:
+        # PGC 1: Main Menu (Menu 1)
+        # If cast menu exists:
+        #   PGC 2: Cast Menu (Menu 2)
+        #   PGC 3+: Episode Menu Pages
+        # Else:
+        #   PGC 2+: Episode Menu Pages
+        
+        has_cast = menu_cast_path is not None
+        has_trailer = menu_trailer_path is not None
+        ep_start_menu_num = 3 if has_cast else 2
+        
+        total_pages = len(menu_episode_paths)
+        
+        # 1. Main Menu PGC (PGC 1)
+        redirects = []
+        for p_idx in range(total_pages):
+            menu_num = ep_start_menu_num + p_idx
+            redirects.append(f"          if (g2 == {menu_num}) {{ g2 = 0; jump menu {menu_num}; }}")
+        redirects_str = "\n".join(redirects)
+        
+        # Generate main menu buttons dynamically
+        main_button_cmds = []
+        btn_idx = 1
+        
+        # Play All (Jump to first episode: Title 2 if trailer is Title 1, else Title 1)
+        play_title = 2 if has_trailer else 1
+        main_button_cmds.append(f'        <button name="button{btn_idx}"> g1 = 1; jump title {play_title}; </button>')
+        btn_idx += 1
+        
+        # Episode Select (only if we have episode sub-menus)
+        if len(video_files) > 1 and total_pages > 0:
+            main_button_cmds.append(f'        <button name="button{btn_idx}"> jump menu {ep_start_menu_num}; </button>')
+            btn_idx += 1
+            
+        # Cast & Info (Menu 2)
+        if has_cast:
+            main_button_cmds.append(f'        <button name="button{btn_idx}"> jump menu 2; </button>')
+            btn_idx += 1
+            
+        # Play Trailer (Title 1)
+        if has_trailer:
+            main_button_cmds.append(f'        <button name="button{btn_idx}"> jump title 1; </button>')
+            btn_idx += 1
+            
+        main_buttons = "\n".join(main_button_cmds)
+        
+        menu_pgcs.append(f'''    <menus>
+      <video format="ntsc" aspect="16:9" />
+      
+      <!-- Menu 1: Main Menu -->
+      <pgc entry="root">
+        <pre>
+{redirects_str}
+        </pre>
+        <vob file="{menu_main_path}" pause="inf" />
+{main_buttons}
+      </pgc>''')
+ 
+        # 2. Cast Menu PGC (PGC 2) - Optional
+        if has_cast:
+            menu_pgcs.append(f'''      <!-- Menu 2: Cast & Info Menu -->
+      <pgc>
+        <pre> g2 = 0; </pre>
+        <vob file="{menu_cast_path}" pause="inf" />
+        <button name="button1"> jump menu 1; </button>
+      </pgc>''')
+ 
+        # 3. Episode Selection Menus
+        for p_idx, ep_menu_path in enumerate(menu_episode_paths):
+            menu_num = ep_start_menu_num + p_idx
+            
+            buttons = []
+            ep_start_idx = p_idx * 6
+            eps_on_page = min(6, len(video_files) - ep_start_idx)
+            
+            btn_idx = 1
+            for i in range(eps_on_page):
+                title_num = ep_start_idx + i + 1
+                if has_trailer:
+                    title_num += 1
+                buttons.append(f'        <button name="button{btn_idx}"> g1 = 0; g2 = {menu_num}; jump title {title_num}; </button>')
+                btn_idx += 1
+                
+            if p_idx > 0:
+                prev_menu_num = ep_start_menu_num + p_idx - 1
+                buttons.append(f'        <button name="button{btn_idx}"> jump menu {prev_menu_num}; </button>')
+                btn_idx += 1
+                
+            buttons.append(f'        <button name="button{btn_idx}"> jump menu 1; </button>')
+            btn_idx += 1
+            
+            if p_idx < total_pages - 1:
+                next_menu_num = ep_start_menu_num + p_idx + 1
+                buttons.append(f'        <button name="button{btn_idx}"> jump menu {next_menu_num}; </button>')
+                btn_idx += 1
+                
+            menu_pgcs.append(f'''      <!-- Menu {menu_num}: Episode Menu Page {p_idx+1} -->
+      <pgc>
+        <pre> g2 = 0; </pre>
+        <vob file="{ep_menu_path}" pause="inf" />
+{chr(10).join(buttons)}
+      </pgc>''')
+      
+        menu_pgcs.append('    </menus>')
+     
+        # Build individual Title PGCs with Play All / Single Play branching
+        title_pgcs = []
+        
+        # Trailer Title PGC (Title 1)
+        if has_trailer:
+            title_pgcs.append(f'''      <!-- Title 1: Trailer -->
+      <pgc>
+        <vob file="{menu_trailer_path}" />
+        <post>
+          call menu;
+        </post>
+      </pgc>''')
+        
+        # Episode Title PGCs
         for i, vf in enumerate(video_files):
-            chapters = "0"  # Chapter at start
-            vob_entries.append(f'      <vob file="{vf}" chapters="{chapters}" />')
-        
+            title_num = i + 2 if has_trailer else i + 1
+            
+            if i < len(video_files) - 1:
+                next_title_num = title_num + 1
+                post_cmd = f'''        <post>
+          if (g1 == 1) jump title {next_title_num};
+          else call menu;
+        </post>'''
+            else:
+                post_cmd = '''        <post>
+          g1 = 0;
+          call menu;
+        </post>'''
+                
+            title_pgcs.append(f'''      <!-- Title {title_num}: Episode {i+1} -->
+      <pgc>
+        <vob file="{vf}" />
+{post_cmd}
+      </pgc>''')
+      
         xml_content = f'''<?xml version="1.0" encoding="UTF-8"?>
 <dvdauthor dest="{self.output_dir / 'DVD'}">
   <vmgm>
     <menus>
+      <video format="ntsc" aspect="16:9" />
       <pgc>
-        <vob file="{menu_video_path}" pause="inf" />
-        <button name="button1">jump titleset 1 title 1;</button>
+        <pre> jump titleset 1 menu; </pre>
       </pgc>
     </menus>
   </vmgm>
   
   <titleset>
-    <menus>
-      <video format="ntsc" aspect="16:9" />
-      <pgc>
-        <vob file="{menu_video_path}" pause="inf" />
-        <subpicture>
-          <stream id="0" mode="highlight">
-            <highlight file="{highlight_path}" />
-            <select file="{select_path}" />
-          </stream>
-        </subpicture>
-{chr(10).join(buttons_xml)}
-      </pgc>
-    </menus>
+{chr(10).join(menu_pgcs)}
     
     <titles>
       <video format="ntsc" aspect="16:9" />
       <audio format="ac3" channels="2" />
-      <pgc>
-{chr(10).join(vob_entries)}
-        <post>call vmgm menu;</post>
-      </pgc>
+{chr(10).join(title_pgcs)}
     </titles>
   </titleset>
 </dvdauthor>
 '''
-        
         output_path.write_text(xml_content)
-        logger.info(f"Generated dvdauthor XML: {output_path}")
+        logger.info(f"Generated advanced dvdauthor XML: {output_path}")
         return output_path
-    
+
     def build_dvd_structure(
         self,
         dvdauthor_xml: Path,
@@ -619,39 +923,31 @@ class MenuBuilder:
     ) -> Path:
         """
         Run dvdauthor to build the DVD file structure.
-        
-        Args:
-            dvdauthor_xml: Path to dvdauthor XML configuration
-            progress_callback: Optional callback for status updates
-            
-        Returns:
-            Path to DVD structure directory
         """
         dvdauthor_path = shutil.which("dvdauthor")
         if not dvdauthor_path:
-            raise DVDAuthorNotFoundError(
-                "dvdauthor not found. Please install:\n"
-                "  Ubuntu/Debian: sudo apt install dvdauthor\n"
-                "  macOS: brew install dvdauthor"
-            )
+            raise DVDAuthorNotFoundError("dvdauthor not found.")
         
         dvd_dir = self.output_dir / "DVD"
+        if dvd_dir.exists():
+            try:
+                shutil.rmtree(dvd_dir)
+            except Exception as e:
+                logger.warning(f"Could not remove existing DVD directory: {e}")
         dvd_dir.mkdir(parents=True, exist_ok=True)
         
         if progress_callback:
             progress_callback("Building DVD structure...")
         
-        # Run dvdauthor
         cmd = [dvdauthor_path, "-x", str(dvdauthor_xml)]
-        
+        logger.debug(f"Running dvdauthor: {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=True, text=True, cwd=self.output_dir)
-        
         if result.returncode != 0:
             raise MenuBuilderError(f"dvdauthor failed: {result.stderr}")
         
         if progress_callback:
             progress_callback("DVD structure complete")
-        
+            
         logger.info(f"Built DVD structure: {dvd_dir}")
         return dvd_dir
 
@@ -662,62 +958,5 @@ def check_menu_dependencies() -> dict[str, bool]:
         "ffmpeg": shutil.which("ffmpeg") is not None,
         "dvdauthor": shutil.which("dvdauthor") is not None,
         "spumux": shutil.which("spumux") is not None,
-        "pillow": True,  # We've already imported it
+        "pillow": True,
     }
-
-
-def main():
-    """Test menu builder module."""
-    import sys
-    
-    logging.basicConfig(level=logging.INFO)
-    
-    print("Checking menu builder dependencies...")
-    deps = check_menu_dependencies()
-    
-    for dep, available in deps.items():
-        status = "✓" if available else "✗"
-        print(f"  {status} {dep}")
-    
-    # Create test menu
-    print("\nGenerating test menu...")
-    
-    config = MenuConfig(
-        style=MenuStyle.MODERN,
-        title="Test Series - Season 1",
-        season_overview="This is a test season overview that describes the plot of this season. "
-                       "It should be displayed at the bottom of the menu."
-    )
-    
-    builder = MenuBuilder(Path("/tmp/jellydisc_menu_test"), config)
-    
-    # Create test episodes
-    episodes = [
-        EpisodeThumbnail(1, "Pilot Episode"),
-        EpisodeThumbnail(2, "The Second One"),
-        EpisodeThumbnail(3, "Episode Three"),
-        EpisodeThumbnail(4, "The Fourth Hour"),
-        EpisodeThumbnail(5, "Five Alive"),
-        EpisodeThumbnail(6, "Six of Hearts"),
-    ]
-    
-    try:
-        bg_path = builder.generate_menu_background(episodes=episodes)
-        print(f"  Generated: {bg_path}")
-        
-        hl_path = builder.generate_highlight_mask(episodes)
-        print(f"  Generated: {hl_path}")
-        
-        sel_path = builder.generate_select_mask(episodes)
-        print(f"  Generated: {sel_path}")
-        
-        print("\nMenu assets generated successfully!")
-        print(f"Output directory: {builder.output_dir}")
-        
-    except Exception as e:
-        print(f"Error: {e}")
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    main()
