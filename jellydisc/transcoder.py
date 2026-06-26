@@ -109,9 +109,9 @@ class Transcoder:
     Includes smart bitrate calculation to maximize quality within disc limits.
     """
     
-    # DVD capacity in bytes (4.7 GB single-layer, using 4.5 GB for safety)
-    DVD_CAPACITY_BYTES = 4.5 * 1024 * 1024 * 1024
-    DVD_CAPACITY_MB = 4500
+    # DVD capacity in bytes (4.7 GB single-layer, using 4.1 GB for safety/headspace)
+    DVD_CAPACITY_BYTES = 4.1 * 1024 * 1024 * 1024
+    DVD_CAPACITY_MB = 4100
     
     # Reserved space for menus and overhead (MB)
     MENU_OVERHEAD_MB = 100
