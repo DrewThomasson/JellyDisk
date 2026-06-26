@@ -1262,7 +1262,78 @@ class JellyDiscApp(_BaseClass):
                                 except Exception:
                                     pass
                 else:
-                    self._log("No local trailers found on server for this item.")
+                    self._log("No local trailers found on server. Checking for remote YouTube trailers...")
+                    import shutil
+                    import subprocess
+                    
+                    item_details = self.jellyfin_client.get_item_details(self.selected_series.id)
+                    remote_trailers = item_details.get("RemoteTrailers", [])
+                    youtube_url = None
+                    if remote_trailers:
+                        for rt in remote_trailers:
+                            rt_url = rt.get("Url", "")
+                            if "youtube.com" in rt_url or "youtu.be" in rt_url:
+                                youtube_url = rt_url
+                                self._log(f"Found remote YouTube trailer: {rt.get('Name')} ({rt_url})")
+                                break
+                    
+                    if youtube_url:
+                        trailer_path = self.current_staging_dir / "trailer.mpg"
+                        if trailer_path.exists() and trailer_path.stat().st_size > 2 * 1024 * 1024:
+                            self._log("✓ Trailer already downloaded and transcoded. Skipping.")
+                        else:
+                            yt_dlp_path = shutil.which("yt-dlp") or "/opt/homebrew/bin/yt-dlp"
+                            if yt_dlp_path and Path(yt_dlp_path).exists():
+                                temp_trailer_input = self.current_staging_dir / "temp_trailer_input.mp4"
+                                try:
+                                    self._log("Downloading YouTube trailer using yt-dlp...")
+                                    if temp_trailer_input.exists():
+                                        temp_trailer_input.unlink()
+                                        
+                                    subprocess.run(
+                                        [
+                                            yt_dlp_path,
+                                            "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+                                            "--merge-output-format", "mp4",
+                                            "-o", str(temp_trailer_input),
+                                            youtube_url
+                                        ],
+                                        capture_output=True,
+                                        text=True,
+                                        check=True,
+                                        timeout=300
+                                    )
+                                    
+                                    if temp_trailer_input.exists() and temp_trailer_input.stat().st_size > 0:
+                                        self._log("Finished downloading trailer. Transcoding...")
+                                        
+                                        def trailer_transcode_progress(progress: float):
+                                            self.after(0, lambda p=progress: self.task_progress.set(0.3 + p * 0.7))
+                                            
+                                        transcoder.transcode(
+                                            str(temp_trailer_input),
+                                            trailer_path,
+                                            progress_callback=trailer_transcode_progress,
+                                            extract_subs=False
+                                        )
+                                        self._log("✓ Trailer transcode completed.")
+                                    else:
+                                        self._log("⚠️ yt-dlp completed but output file was not created or empty.")
+                                        trailer_path = None
+                                except Exception as e:
+                                    self._log(f"⚠️ YouTube trailer download/transcode failed: {e}")
+                                    trailer_path = None
+                                finally:
+                                    if temp_trailer_input.exists():
+                                        try:
+                                            temp_trailer_input.unlink()
+                                        except Exception:
+                                            pass
+                            else:
+                                self._log("⚠️ yt-dlp is not available. Cannot download YouTube trailer.")
+                                trailer_path = None
+                    else:
+                        self._log("No remote YouTube trailers found on server for this item.")
             except Exception as e:
                 self._log(f"⚠️ Failed to retrieve/process trailer: {e}")
                 trailer_path = None
