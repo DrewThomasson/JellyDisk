@@ -15,6 +15,27 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Callable
 
+def load_env_file():
+    """Load local .env file variables into os.environ if it exists."""
+    for base in [Path("."), Path(__file__).resolve().parent.parent]:
+        env_path = base / ".env"
+        if env_path.exists():
+            try:
+                with open(env_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        if "=" in line:
+                            k, v = line.split("=", 1)
+                            # Strip quotes if present
+                            v = v.strip().strip("'\"")
+                            os.environ[k.strip()] = v
+            except Exception:
+                pass
+
+load_env_file()
+
 try:
     import customtkinter as ctk
     from PIL import Image, ImageTk
