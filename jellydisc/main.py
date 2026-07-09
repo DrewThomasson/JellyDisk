@@ -1344,7 +1344,7 @@ class JellyDiscApp(_BaseClass):
             actors_count = 0
             for p in getattr(self.selected_series, "people_details", []):
                 if p["type"] == "Actor" and p["primary_image_tag"]:
-                    if actors_count < 6:
+                    if actors_count < 18:
                         target_people.append(p)
                         actors_count += 1
                 elif p["type"] in ("Director", "Writer") and p["primary_image_tag"]:
@@ -2322,13 +2322,13 @@ def run_cli(args):
     people_dir = assets_dir / "people"
     people_dir.mkdir(parents=True, exist_ok=True)
     
-    # We will limit the image downloads to actors that will be shown in the menu (top 6 actors)
+    # We will limit the image downloads to actors that will be shown in the menu (top 18 actors for 3 pages)
     # plus any directors and writers.
     target_people = []
     actors_count = 0
     for p in getattr(series, "people_details", []):
         if p["type"] == "Actor" and p["primary_image_tag"]:
-            if actors_count < 6:
+            if actors_count < 18:
                 target_people.append(p)
                 actors_count += 1
         elif p["type"] in ("Director", "Writer") and p["primary_image_tag"]:
