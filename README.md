@@ -150,6 +150,19 @@ JellyDisc/
 └── README.md
 ```
 
+## Printing Guidelines
+
+All generated artwork PDFs are configured at high-resolution **300 DPI** to match standard optical media packaging sizes exactly:
+
+- **DVD Cover Wrap:** 273mm x 183mm (Fits standard 14mm spine DVD cases).
+- **Episode Booklet:** 120mm x 180mm (Fits booklet clips inside standard DVD cases).
+- **Disc Label:** 118mm x 118mm (Standard printable CD/DVD disc face size).
+
+> [!IMPORTANT]
+> When printing the generated PDFs, you **must** configure your printer settings as follows:
+> - Set **Page Scaling / Scale** to **"Actual Size"** or **"100%"**.
+> - Do **not** select *"Fit to Page"*, *"Scale to Fit"*, or *"Shrink to Fit"*, as this will stretch the images to fill the entire sheet of paper, making them too large to fit in your DVD cases.
+
 ## Development Roadmap
 
 - [x] **Phase 1: Scaffolding**
