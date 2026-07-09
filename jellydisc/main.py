@@ -478,6 +478,13 @@ class JellyDiscApp(_BaseClass):
         )
         folio_check.grid(row=7, column=1, sticky="w", padx=10, pady=10)
 
+        # Generate Printable Disc Label
+        self.disc_label_var = ctk.BooleanVar(value=True)
+        disc_label_check = ctk.CTkCheckBox(
+            settings_frame,
+            text="Generate Printable Disc Face Labels (PDF)",
+            variable=self.disc_label_var
+        )
         disc_label_check.grid(row=8, column=1, sticky="w", padx=10, pady=10)
         
         # Disc Size
