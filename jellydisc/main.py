@@ -501,6 +501,15 @@ class JellyDiscApp(_BaseClass):
         )
         disc_size_dropdown.grid(row=9, column=1, sticky="w", padx=10, pady=10)
         
+        # Include Trivia Game
+        self.trivia_var = ctk.BooleanVar(value=True)
+        trivia_check = ctk.CTkCheckBox(
+            settings_frame,
+            text="Include Interactive Trivia Game",
+            variable=self.trivia_var
+        )
+        trivia_check.grid(row=10, column=1, sticky="w", padx=10, pady=10)
+        
         # Summary frame
         self.config_summary = ctk.CTkFrame(frame)
         self.config_summary.pack(fill="x", pady=20)
@@ -791,7 +800,7 @@ class JellyDiscApp(_BaseClass):
                     self.after(0, lambda: self._log("⚠️ Erase failed"))
                     self.after(0, lambda: self._update_task("Erase failed", 0))
             except Exception as e:
-                self.after(0, lambda: self._log(f"⚠️ Erase error: {e}"))
+                self.after(0, lambda ex=e: self._log(f"⚠️ Erase error: {ex}"))
                 self.after(0, lambda: self._update_task("Erase error", 0))
             finally:
                 self.after(0, lambda: self.erase_disc_btn.configure(state="normal"))
@@ -912,7 +921,7 @@ class JellyDiscApp(_BaseClass):
                 shows = self.jellyfin_client.get_tv_shows()
                 self.after(0, lambda: self._populate_shows(shows))
             except Exception as e:
-                self.after(0, lambda: self._log(f"Error loading shows: {e}"))
+                self.after(0, lambda ex=e: self._log(f"Error loading shows: {ex}"))
         
         threading.Thread(target=load, daemon=True).start()
     
@@ -951,7 +960,7 @@ class JellyDiscApp(_BaseClass):
                 if self.search_var.get().strip() == query:
                     self.after(0, lambda: self._populate_search_results(results, query))
             except Exception as e:
-                self.after(0, lambda: self._log(f"Search error: {e}"))
+                self.after(0, lambda ex=e: self._log(f"Search error: {ex}"))
                 
         threading.Thread(target=run_search, daemon=True).start()
 
@@ -1003,7 +1012,7 @@ class JellyDiscApp(_BaseClass):
                 seasons = self.jellyfin_client.get_seasons(series.id)
                 self.after(0, lambda: self._populate_seasons(seasons))
             except Exception as e:
-                self.after(0, lambda: self._log(f"Error loading seasons: {e}"))
+                self.after(0, lambda ex=e: self._log(f"Error loading seasons: {ex}"))
         
         threading.Thread(target=load, daemon=True).start()
     
@@ -1043,7 +1052,7 @@ class JellyDiscApp(_BaseClass):
                 season.episodes = episodes
                 self.after(0, lambda: self._populate_episodes(episodes))
             except Exception as e:
-                self.after(0, lambda: self._log(f"Error loading episodes: {e}"))
+                self.after(0, lambda ex=e: self._log(f"Error loading episodes: {ex}"))
         
         threading.Thread(target=load, daemon=True).start()
     
@@ -1198,7 +1207,7 @@ class JellyDiscApp(_BaseClass):
             try:
                 self._run_authoring_pipeline(burn=False)
             except Exception as e:
-                self.after(0, lambda: self._log(f"Error: {e}"))
+                self.after(0, lambda ex=e: self._log(f"Error: {ex}"))
             finally:
                 self.after(0, lambda: self.start_btn.configure(state="normal"))
         
@@ -1228,7 +1237,7 @@ class JellyDiscApp(_BaseClass):
             try:
                 self._run_authoring_pipeline(burn=True)
             except Exception as e:
-                self.after(0, lambda: self._log(f"Error: {e}"))
+                self.after(0, lambda ex=e: self._log(f"Error: {ex}"))
             finally:
                 self.after(0, lambda: self.start_btn.configure(state="normal"))
         
@@ -1244,6 +1253,7 @@ class JellyDiscApp(_BaseClass):
         menu_style = MenuStyle.MODERN if self.style_var.get() == "Modern" else MenuStyle.RETRO
         include_subs = self.subtitles_var.get()
         include_trailer = self.trailer_var.get()
+        include_trivia = self.trivia_var.get()
         
         dvd_capacity_mb = 7900 if "DVD-9" in self.disc_size_var.get() else 4100
         
@@ -1629,7 +1639,7 @@ class JellyDiscApp(_BaseClass):
             self._update_task(f"Disc {disc_num}: Generating Main Menu...", 0.5)
             self._log("Generating Main Menu...")
             m_bg, m_hl, m_sel, m_btns = menu_builder.generate_main_menu(
-                backdrop_path, logo_path, has_trailer=has_trailer, show_episode_select=show_ep_select
+                backdrop_path, logo_path, has_trailer=has_trailer, show_episode_select=show_ep_select, has_trivia=include_trivia
             )
             m_base_vid = menu_builder.generate_menu_video(m_bg, "menu_main_base.mpg", theme_path)
             menu_main_vid = menu_builder.compile_interactive_menu(
@@ -1684,6 +1694,56 @@ class JellyDiscApp(_BaseClass):
                     )
                     menu_episode_vids.append(ep_vid)
             
+            # Step 4.5: Generate Trivia Menus (Optional)
+            menu_trivia_vids = []
+            menu_trivia_wrong_vid = None
+            menu_trivia_win_vid = None
+            questions = []
+            
+            if include_trivia:
+                self._update_task(f"Disc {disc_num}: Generating Trivia Menus...", 0.70)
+                self._log("Generating Trivia game menus...")
+                
+                from jellydisc.menu_builder import generate_trivia_questions
+                rel_year = getattr(self.selected_series, "release_year", "")
+                eps_list = self.selected_season.episodes
+                act_list = getattr(self.selected_series, "actors", [])
+                dir_list = getattr(self.selected_series, "directors", [])
+                wri_list = getattr(self.selected_series, "writers", [])
+                
+                questions = generate_trivia_questions(
+                    series_name=self.selected_series.name,
+                    season_name=self.selected_season.name,
+                    release_year=rel_year,
+                    episodes=eps_list,
+                    actors=act_list,
+                    directors=dir_list,
+                    writers=wri_list
+                )
+                
+                t_questions, t_wrong, t_win = menu_builder.generate_trivia_menus(
+                    questions, backdrop_path, logo_path
+                )
+                
+                for q_idx, (q_bg, q_hl, q_sel, q_btns) in enumerate(t_questions):
+                    q_base_vid = menu_builder.generate_menu_video(q_bg, f"menu_trivia_q_base_{q_idx+1}.mpg", duration=2)
+                    q_vid = menu_builder.compile_interactive_menu(
+                        q_base_vid, q_hl, q_sel, q_btns, menu_builder.output_dir / f"menu_trivia_q_{q_idx+1}.mpg"
+                    )
+                    menu_trivia_vids.append(q_vid)
+                    
+                w_bg, w_hl, w_sel, w_btns = t_wrong
+                w_base_vid = menu_builder.generate_menu_video(w_bg, "menu_trivia_wrong_base.mpg", duration=2)
+                menu_trivia_wrong_vid = menu_builder.compile_interactive_menu(
+                    w_base_vid, w_hl, w_sel, w_btns, menu_builder.output_dir / "menu_trivia_wrong.mpg"
+                )
+                
+                win_bg, win_hl, win_sel, win_btns = t_win
+                win_base_vid = menu_builder.generate_menu_video(win_bg, "menu_trivia_win_base.mpg", duration=2)
+                menu_trivia_win_vid = menu_builder.compile_interactive_menu(
+                    win_base_vid, win_hl, win_sel, win_btns, menu_builder.output_dir / "menu_trivia_win.mpg"
+                )
+            
             # Step 5: Generate dvdauthor XML
             self._update_task(f"Disc {disc_num}: Building DVD structure...", 0.75)
             self._log("Building DVD structure...")
@@ -1701,7 +1761,11 @@ class JellyDiscApp(_BaseClass):
                 menu_episode_vids,
                 menu_cast_paths=menu_cast_vids if menu_cast_vids else None,
                 menu_trailer_path=disc_trailer_path,
-                chapters_list=chapters_list
+                chapters_list=chapters_list,
+                menu_trivia_paths=menu_trivia_vids if menu_trivia_vids else None,
+                menu_trivia_wrong_path=menu_trivia_wrong_vid,
+                menu_trivia_win_path=menu_trivia_win_vid,
+                trivia_questions=questions if questions else None
             )
             
             # Step 6: Build DVD structure
@@ -2136,11 +2200,11 @@ def run_cli(args):
     current_staging_dir = staging_dir / series_folder / season_folder
     current_staging_dir.mkdir(parents=True, exist_ok=True)
     
-    # Plan spanning & Options
     video_standard = VideoStandard.NTSC if args.standard == "NTSC" else VideoStandard.PAL
     menu_style = MenuStyle.MODERN if args.style == "Modern" else MenuStyle.RETRO
     include_subs = not args.no_subs
     include_trailer = not args.no_trailer
+    include_trivia = not args.no_trivia
     
     burn_disc = args.burn
     erase_disc = args.erase
@@ -2160,6 +2224,11 @@ def run_cli(args):
             trail_choice = input("🎥 Include trailer (YouTube lookup)? (Y/n): ").strip().lower()
             if trail_choice in ('n', 'no'):
                 include_trailer = False
+                
+        if not args.no_trivia:
+            trivia_choice = input("🎮 Include interactive trivia game on the DVD? (Y/n): ").strip().lower()
+            if trivia_choice in ('n', 'no'):
+                include_trivia = False
                 
         style_choice = input("🎨 Menu layout style: [1] Modern (clean dark), [2] Retro (classic) [Default: 1]: ").strip()
         if style_choice == '2':
@@ -2232,6 +2301,7 @@ def run_cli(args):
             print(f"  Season     : {season.name}")
         print(f"  Subtitles  : {'Yes' if include_subs else 'No'}")
         print(f"  Trailers   : {'Yes' if include_trailer else 'No'}")
+        print(f"  Trivia Game: {'Yes' if include_trivia else 'No'}")
         print(f"  Menu Style : {menu_style.name}")
         print(f"  Standard   : {video_standard.name}")
         print(f"  Disc Size  : {'DVD-9 (Dual Layer) ⚠️ Prone to issues on legacy players' if dvd_capacity_mb == 7900 else 'DVD-5 (Single Layer)'}")
@@ -2513,7 +2583,7 @@ def run_cli(args):
         show_ep_select = len(disc_plan.episodes) > 1
         
         m_bg, m_hl, m_sel, m_btns = menu_builder.generate_main_menu(
-            backdrop_path, logo_path, has_trailer=(disc_trailer is not None), show_episode_select=show_ep_select
+            backdrop_path, logo_path, has_trailer=(disc_trailer is not None), show_episode_select=show_ep_select, has_trivia=include_trivia
         )
         m_base_vid = menu_builder.generate_menu_video(m_bg, "menu_main_base.mpg", theme_path)
         menu_main_vid = menu_builder.compile_interactive_menu(m_base_vid, m_hl, m_sel, m_btns, current_staging_dir / "menu_main.mpg")
@@ -2546,6 +2616,54 @@ def run_cli(args):
                 ep_vid = menu_builder.compile_interactive_menu(ep_base_vid, ep_hl, ep_sel, ep_btns, current_staging_dir / f"menu_episodes_{p_idx+1}.mpg")
                 menu_episode_vids.append(ep_vid)
                 
+        # Step 4.5: Generate Trivia Menus (Optional)
+        menu_trivia_vids = []
+        menu_trivia_wrong_vid = None
+        menu_trivia_win_vid = None
+        questions = []
+        
+        if include_trivia:
+            print("  Generating Trivia game menus...")
+            from jellydisc.menu_builder import generate_trivia_questions
+            rel_year = getattr(series, "release_year", "")
+            eps_list = season.episodes
+            act_list = getattr(series, "actors", [])
+            dir_list = getattr(series, "directors", [])
+            wri_list = getattr(series, "writers", [])
+            
+            questions = generate_trivia_questions(
+                series_name=series.name,
+                season_name=season.name,
+                release_year=rel_year,
+                episodes=eps_list,
+                actors=act_list,
+                directors=dir_list,
+                writers=wri_list
+            )
+            
+            t_questions, t_wrong, t_win = menu_builder.generate_trivia_menus(
+                questions, backdrop_path, logo_path
+            )
+            
+            for q_idx, (q_bg, q_hl, q_sel, q_btns) in enumerate(t_questions):
+                q_base_vid = menu_builder.generate_menu_video(q_bg, f"menu_trivia_q_base_{q_idx+1}.mpg", duration=2)
+                q_vid = menu_builder.compile_interactive_menu(
+                    q_base_vid, q_hl, q_sel, q_btns, current_staging_dir / f"menu_trivia_q_{q_idx+1}.mpg"
+                )
+                menu_trivia_vids.append(q_vid)
+                
+            w_bg, w_hl, w_sel, w_btns = t_wrong
+            w_base_vid = menu_builder.generate_menu_video(w_bg, "menu_trivia_wrong_base.mpg", duration=2)
+            menu_trivia_wrong_vid = menu_builder.compile_interactive_menu(
+                w_base_vid, w_hl, w_sel, w_btns, current_staging_dir / "menu_trivia_wrong.mpg"
+            )
+            
+            win_bg, win_hl, win_sel, win_btns = t_win
+            win_base_vid = menu_builder.generate_menu_video(win_bg, "menu_trivia_win_base.mpg", duration=2)
+            menu_trivia_win_vid = menu_builder.compile_interactive_menu(
+                win_base_vid, win_hl, win_sel, win_btns, current_staging_dir / "menu_trivia_win.mpg"
+            )
+            
         # dvdauthor structure
         print("  Assembling DVD filesystem structure...")
         
@@ -2562,7 +2680,11 @@ def run_cli(args):
             menu_episode_vids,
             menu_cast_paths=menu_cast_vids if menu_cast_vids else None,
             menu_trailer_path=disc_trailer,
-            chapters_list=chapters_list
+            chapters_list=chapters_list,
+            menu_trivia_paths=menu_trivia_vids if menu_trivia_vids else None,
+            menu_trivia_wrong_path=menu_trivia_wrong_vid,
+            menu_trivia_win_path=menu_trivia_win_vid,
+            trivia_questions=questions if questions else None
         )
         dvd_dir = menu_builder.build_dvd_structure(xml_path)
         
@@ -2689,6 +2811,7 @@ def main():
     parser.add_argument("--style", choices=["Modern", "Retro"], default="Modern", help="Interactive menu layout style")
     parser.add_argument("--no-subs", action="store_true", help="Disable parsing and importing subtitles")
     parser.add_argument("--no-trailer", action="store_true", help="Disable inclusion of local trailers")
+    parser.add_argument("--no-trivia", action="store_true", help="Disable inclusion of interactive trivia game")
     parser.add_argument("--burn", action="store_true", help="Automatically burn created ISOs to disc")
     parser.add_argument("--drive", help="Optical drive mount path or system dev path (e.g. /dev/rdisk4)")
     parser.add_argument("--speed", type=int, default=4, help="Write speed for optical disc burning")

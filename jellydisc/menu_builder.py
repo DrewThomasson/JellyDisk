@@ -273,7 +273,8 @@ class MenuBuilder:
         backdrop_path: Optional[Path] = None,
         logo_path: Optional[Path] = None,
         has_trailer: bool = False,
-        show_episode_select: bool = True
+        show_episode_select: bool = True,
+        has_trivia: bool = False
     ) -> tuple[Path, Path, Path, list[tuple[int, int, int, int]]]:
         """
         Generate the Main Menu background and highlight masks.
@@ -304,6 +305,8 @@ class MenuBuilder:
             button_labels.append("CAST & INFO")
         if has_trailer:
             button_labels.append("PLAY TRAILER")
+        if has_trivia:
+            button_labels.append("PLAY TRIVIA")
             
         # Setup buttons layout
         btn_font = self._get_font(24)
@@ -316,9 +319,12 @@ class MenuBuilder:
         elif num_buttons == 3:
             gap = 60
             start_y = header_end_y + 55
-        else: # 4 buttons
+        elif num_buttons == 4:
             gap = 50
             start_y = header_end_y + 35
+        else: # 5 buttons
+            gap = 40
+            start_y = header_end_y + 20
             
         buttons_design = []
         mask_draws = [hl_draw, sel_draw]
@@ -726,6 +732,179 @@ class MenuBuilder:
         coded_bounds = [self._scale_box_to_coded(box) for box in buttons_design]
         return bg_path, hl_path, sel_path, coded_bounds
 
+    def generate_trivia_menus(
+        self,
+        questions: list[dict],
+        backdrop_path: Optional[Path] = None,
+        logo_path: Optional[Path] = None
+    ) -> tuple[list[tuple[Path, Path, Path, list[tuple[int, int, int, int]]]], tuple[Path, Path, Path, list[tuple[int, int, int, int]]], tuple[Path, Path, Path, list[tuple[int, int, int, int]]]]:
+        """
+        Generate trivia game menu backgrounds and highlight/select masks.
+        """
+        generated_questions = []
+        accent_color = self.config.highlight_color
+        
+        # 1. QUESTION MENUS
+        for idx, q in enumerate(questions):
+            bg_image = self._load_backdrop(backdrop_path)
+            draw = ImageDraw.Draw(bg_image)
+            bg_image = self._apply_style(bg_image)
+            draw = ImageDraw.Draw(bg_image)
+            
+            hl_image = Image.new('RGB', (self.DESIGN_WIDTH, self.DESIGN_HEIGHT), (0, 0, 0))
+            sel_image = Image.new('RGB', (self.DESIGN_WIDTH, self.DESIGN_HEIGHT), (0, 0, 0))
+            hl_draw = ImageDraw.Draw(hl_image)
+            sel_draw = ImageDraw.Draw(sel_image)
+            
+            header_end_y = self._draw_menu_header(bg_image, draw, logo_path)
+            
+            font_sub = self._get_font(20)
+            sub_text = f"TRIVIA CHALLENGE (QUESTION {idx + 1}/{len(questions)})"
+            sub_bbox = draw.textbbox((0, 0), sub_text, font=font_sub)
+            sub_x = (self.DESIGN_WIDTH - (sub_bbox[2] - sub_bbox[0])) // 2
+            draw.text((sub_x, header_end_y + 5), sub_text, fill=self.config.subtitle_color, font=font_sub)
+            
+            font_q = self._get_font(22)
+            q_wrapped = textwrap.fill(q["question"], width=55)
+            q_y = header_end_y + 50
+            
+            draw.rectangle([(100, q_y - 5), (self.DESIGN_WIDTH - 100, q_y + 110)], fill=(0, 0, 0, 100), outline=(accent_color[0], accent_color[1], accent_color[2], 50), width=1)
+            
+            q_bbox = draw.textbbox((0, 0), q_wrapped, font=font_q)
+            q_w = q_bbox[2] - q_bbox[0]
+            qx = (self.DESIGN_WIDTH - q_w) // 2
+            draw.text((qx, q_y + 10), q_wrapped, fill=self.config.text_color, font=font_q)
+            
+            grid_x = [230, 530]
+            grid_y = [q_y + 130, q_y + 195]
+            
+            font_opt = self._get_font(13)
+            mask_draws = [hl_draw, sel_draw]
+            buttons_design = []
+            
+            for o_idx, opt in enumerate(q["options"]):
+                col = o_idx % 2
+                row = o_idx // 2
+                cx = grid_x[col]
+                cy = grid_y[row]
+                
+                opt_letter = ["A", "B", "C", "D"][o_idx]
+                opt_str = f"{opt_letter}. {opt}"
+                if len(opt_str) > 28:
+                    opt_str = opt_str[:26] + "..."
+                    
+                btn_box = self._draw_text_button(draw, opt_str, cx, cy, font_opt, self.config.text_color, mask_draws, padding=12)
+                buttons_design.append(btn_box)
+                
+            nav_y = q_y + 270
+            btn_font = self._get_font(18)
+            box_exit = self._draw_text_button(draw, "EXIT GAME", self.DESIGN_WIDTH // 2, nav_y, btn_font, self.config.subtitle_color, mask_draws)
+            buttons_design.append(box_exit)
+            
+            final_bg = bg_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.LANCZOS)
+            final_hl = hl_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.NEAREST)
+            final_sel = sel_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.NEAREST)
+            
+            bg_path = self.output_dir / f"menu_trivia_q_bg_{idx + 1}.png"
+            hl_path = self.output_dir / f"menu_trivia_q_highlight_{idx + 1}.png"
+            sel_path = self.output_dir / f"menu_trivia_q_select_{idx + 1}.png"
+            
+            final_bg.save(bg_path, "PNG")
+            final_hl.save(hl_path, "PNG")
+            final_sel.save(sel_path, "PNG")
+            
+            coded_bounds = [self._scale_box_to_coded(box) for box in buttons_design]
+            generated_questions.append((bg_path, hl_path, sel_path, coded_bounds))
+            
+        # 2. WRONG ANSWER / GAME OVER MENU
+        bg_image = self._load_backdrop(backdrop_path)
+        draw = ImageDraw.Draw(bg_image)
+        bg_image = self._apply_style(bg_image)
+        draw = ImageDraw.Draw(bg_image)
+        
+        hl_image = Image.new('RGB', (self.DESIGN_WIDTH, self.DESIGN_HEIGHT), (0, 0, 0))
+        sel_image = Image.new('RGB', (self.DESIGN_WIDTH, self.DESIGN_HEIGHT), (0, 0, 0))
+        hl_draw = ImageDraw.Draw(hl_image)
+        sel_draw = ImageDraw.Draw(sel_image)
+        
+        header_end_y = self._draw_menu_header(bg_image, draw, logo_path)
+        
+        font_status = self._get_font(42)
+        status_text = "WRONG ANSWER!"
+        sb = draw.textbbox((0, 0), status_text, font=font_status)
+        sx = (self.DESIGN_WIDTH - (sb[2] - sb[0])) // 2
+        draw.text((sx, header_end_y + 60), status_text, fill=(230, 70, 70), font=font_status)
+        
+        font_sub = self._get_font(20)
+        sub_text = "Select an option below to continue."
+        sub_bbox = draw.textbbox((0, 0), sub_text, font=font_sub)
+        sub_x = (self.DESIGN_WIDTH - (sub_bbox[2] - sub_bbox[0])) // 2
+        draw.text((sub_x, header_end_y + 130), sub_text, fill=self.config.text_color, font=font_sub)
+        
+        mask_draws = [hl_draw, sel_draw]
+        btn_font = self._get_font(22)
+        
+        box_retry = self._draw_text_button(draw, "TRY AGAIN", self.DESIGN_WIDTH // 2, header_end_y + 220, btn_font, self.config.text_color, mask_draws)
+        box_exit = self._draw_text_button(draw, "EXIT TO MAIN MENU", self.DESIGN_WIDTH // 2, header_end_y + 295, btn_font, self.config.subtitle_color, mask_draws)
+        
+        final_bg = bg_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.LANCZOS)
+        final_hl = hl_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.NEAREST)
+        final_sel = sel_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.NEAREST)
+        
+        bg_path_wrong = self.output_dir / "menu_trivia_wrong_bg.png"
+        hl_path_wrong = self.output_dir / "menu_trivia_wrong_highlight.png"
+        sel_path_wrong = self.output_dir / "menu_trivia_wrong_select.png"
+        
+        final_bg.save(bg_path_wrong, "PNG")
+        final_hl.save(hl_path_wrong, "PNG")
+        final_sel.save(sel_path_wrong, "PNG")
+        
+        coded_buttons_wrong = [self._scale_box_to_coded(box_retry), self._scale_box_to_coded(box_exit)]
+        wrong_menu = (bg_path_wrong, hl_path_wrong, sel_path_wrong, coded_buttons_wrong)
+        
+        # 3. VICTORY / WIN MENU
+        bg_image = self._load_backdrop(backdrop_path)
+        draw = ImageDraw.Draw(bg_image)
+        bg_image = self._apply_style(bg_image)
+        draw = ImageDraw.Draw(bg_image)
+        
+        hl_image = Image.new('RGB', (self.DESIGN_WIDTH, self.DESIGN_HEIGHT), (0, 0, 0))
+        sel_image = Image.new('RGB', (self.DESIGN_WIDTH, self.DESIGN_HEIGHT), (0, 0, 0))
+        hl_draw = ImageDraw.Draw(hl_image)
+        sel_draw = ImageDraw.Draw(sel_image)
+        
+        header_end_y = self._draw_menu_header(bg_image, draw, logo_path)
+        
+        font_status = self._get_font(42)
+        status_text = "CONGRATULATIONS!"
+        sb = draw.textbbox((0, 0), status_text, font=font_status)
+        sx = (self.DESIGN_WIDTH - (sb[2] - sb[0])) // 2
+        draw.text((sx, header_end_y + 60), status_text, fill=(230, 200, 70), font=font_status)
+        
+        sub_text = "You answered all trivia questions correctly!"
+        sub_bbox = draw.textbbox((0, 0), sub_text, font=font_sub)
+        sub_x = (self.DESIGN_WIDTH - (sub_bbox[2] - sub_bbox[0])) // 2
+        draw.text((sub_x, header_end_y + 130), sub_text, fill=self.config.text_color, font=font_sub)
+        
+        box_win_exit = self._draw_text_button(draw, "RETURN TO MAIN MENU", self.DESIGN_WIDTH // 2, header_end_y + 240, btn_font, self.config.text_color, mask_draws)
+        
+        final_bg = bg_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.LANCZOS)
+        final_hl = hl_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.NEAREST)
+        final_sel = sel_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.NEAREST)
+        
+        bg_path_win = self.output_dir / "menu_trivia_win_bg.png"
+        hl_path_win = self.output_dir / "menu_trivia_win_highlight.png"
+        sel_path_win = self.output_dir / "menu_trivia_win_select.png"
+        
+        final_bg.save(bg_path_win, "PNG")
+        final_hl.save(hl_path_win, "PNG")
+        final_sel.save(sel_path_win, "PNG")
+        
+        coded_buttons_win = [self._scale_box_to_coded(box_win_exit)]
+        win_menu = (bg_path_win, hl_path_win, sel_path_win, coded_buttons_win)
+        
+        return generated_questions, wrong_menu, win_menu
+
     def generate_menu_video(
         self,
         background_path: Path,
@@ -849,7 +1028,11 @@ class MenuBuilder:
         menu_cast_paths: Optional[list[Path]] = None,
         menu_trailer_path: Optional[Path] = None,
         chapters_list: Optional[list[str]] = None,
-        output_path: Optional[Path] = None
+        output_path: Optional[Path] = None,
+        menu_trivia_paths: Optional[list[Path]] = None,
+        menu_trivia_wrong_path: Optional[Path] = None,
+        menu_trivia_win_path: Optional[Path] = None,
+        trivia_questions: Optional[list[dict]] = None
     ) -> Path:
         """
         Generate dvdauthor XML configuration with advanced VM state registers.
@@ -871,9 +1054,14 @@ class MenuBuilder:
         has_cast = menu_cast_paths is not None and len(menu_cast_paths) > 0
         num_cast_menus = len(menu_cast_paths) if has_cast else 0
         has_trailer = menu_trailer_path is not None
+        has_trivia = menu_trivia_paths is not None and len(menu_trivia_paths) > 0 and trivia_questions is not None
         ep_start_menu_num = 2 + num_cast_menus
         
         total_pages = len(menu_episode_paths)
+        
+        trivia_start_menu_num = ep_start_menu_num + total_pages
+        trivia_wrong_menu_num = trivia_start_menu_num + (len(menu_trivia_paths) if has_trivia else 0)
+        trivia_win_menu_num = trivia_wrong_menu_num + 1 if has_trivia else 0
         
         # 1. Main Menu PGC (PGC 1)
         redirects = []
@@ -904,6 +1092,11 @@ class MenuBuilder:
         # Play Trailer (Title 1)
         if has_trailer:
             main_button_cmds.append(f'        <button name="button{btn_idx}"> jump title 1; </button>')
+            btn_idx += 1
+            
+        # Play Trivia Game
+        if has_trivia:
+            main_button_cmds.append(f'        <button name="button{btn_idx}"> jump menu {trivia_start_menu_num}; </button>')
             btn_idx += 1
             
         main_buttons = "\n".join(main_button_cmds)
@@ -984,7 +1177,50 @@ class MenuBuilder:
         <vob file="{ep_menu_path}" pause="inf" />
 {chr(10).join(buttons)}
       </pgc>''')
-      
+            
+        # 4. Trivia Menus PGCs
+        if has_trivia:
+            # Questions
+            for i, trivia_path in enumerate(menu_trivia_paths):
+                trivia_menu_num = trivia_start_menu_num + i
+                next_trivia_menu_num = trivia_menu_num + 1 if i < len(menu_trivia_paths) - 1 else trivia_win_menu_num
+                
+                buttons = []
+                correct_idx = trivia_questions[i]["correct_index"]
+                for o_idx in range(4):
+                    btn_num = o_idx + 1
+                    if o_idx == correct_idx:
+                        buttons.append(f'        <button name="button{btn_num}"> jump menu {next_trivia_menu_num}; </button>')
+                    else:
+                        buttons.append(f'        <button name="button{btn_num}"> jump menu {trivia_wrong_menu_num}; </button>')
+                
+                # Exit Game Button
+                buttons.append(f'        <button name="button5"> jump menu 1; </button>')
+                
+                menu_pgcs.append(f'''      <!-- Menu {trivia_menu_num}: Trivia Question {i+1} -->
+      <pgc>
+        <pre> g2 = 0; </pre>
+        <vob file="{trivia_path}" pause="inf" />
+{chr(10).join(buttons)}
+      </pgc>''')
+                
+            # Wrong screen
+            menu_pgcs.append(f'''      <!-- Menu {trivia_wrong_menu_num}: Trivia Wrong Screen -->
+      <pgc>
+        <pre> g2 = 0; </pre>
+        <vob file="{menu_trivia_wrong_path}" pause="inf" />
+        <button name="button1"> jump menu {trivia_start_menu_num}; </button>
+        <button name="button2"> jump menu 1; </button>
+      </pgc>''')
+            
+            # Win screen
+            menu_pgcs.append(f'''      <!-- Menu {trivia_win_menu_num}: Trivia Win Screen -->
+      <pgc>
+        <pre> g2 = 0; </pre>
+        <vob file="{menu_trivia_win_path}" pause="inf" />
+        <button name="button1"> jump menu 1; </button>
+      </pgc>''')
+       
         menu_pgcs.append('    </menus>')
      
         # Build individual Title PGCs with Play All / Single Play branching
@@ -1096,3 +1332,133 @@ def check_menu_dependencies() -> dict[str, bool]:
         "spumux": shutil.which("spumux") is not None,
         "pillow": True,
     }
+
+
+def generate_trivia_questions(
+    series_name: str,
+    season_name: str,
+    release_year: Optional[str],
+    episodes: list,
+    actors: Optional[list[str]] = None,
+    directors: Optional[list[str]] = None,
+    writers: Optional[list[str]] = None
+) -> list[dict]:
+    """
+    Generate trivia questions dynamically from local Jellyfin metadata fields.
+    """
+    questions = []
+    import random
+    
+    # 1. Cast Question
+    valid_actors = []
+    if actors:
+        for actor in actors:
+            if " as " in actor:
+                valid_actors.append(actor)
+                
+    if valid_actors:
+        chosen = random.choice(valid_actors)
+        name, role = chosen.split(" as ", 1)
+        role = role.strip()
+        name = name.strip()
+        
+        other_names = [act.split(" as ")[0].strip() for act in actors if act != chosen]
+        fallback_names = ["Zach Hadel", "Michael Cusack", "Drew Thomasson", "John Carpenter", "Kurt Russell", "Donald Pleasence"]
+        for f in fallback_names:
+            if f not in other_names and f != name:
+                other_names.append(f)
+                
+        distractors = random.sample(other_names, min(len(other_names), 3))
+        while len(distractors) < 3:
+            distractors.append(f"Generic Actor {len(distractors) + 1}")
+            
+        options = distractors + [name]
+        random.shuffle(options)
+        correct_idx = options.index(name)
+        
+        questions.append({
+            "question": f"Who plays the character '{role}' in {series_name}?",
+            "options": options,
+            "correct_index": correct_idx
+        })
+        
+    # 2. Release Year Question
+    if release_year:
+        try:
+            year = int(str(release_year)[:4])
+        except ValueError:
+            year = 2024
+            
+        options = [year, year - 2, year + 3, year - 5]
+        options = list(set(options))
+        while len(options) < 4:
+            options.append(options[-1] + 1)
+        options = [str(o) for o in options]
+        
+        correct_str = str(year)
+        random.shuffle(options)
+        correct_idx = options.index(correct_str)
+        
+        questions.append({
+            "question": f"In what year was {series_name} released?",
+            "options": options,
+            "correct_index": correct_idx
+        })
+        
+    # 3. Episode / Synopsis Question
+    if episodes and len(episodes) > 1:
+        real_ep = random.choice(episodes)
+        real_name = getattr(real_ep, "name", getattr(real_ep, "episode_name", ""))
+        
+        fake_names = [
+            "The Lost Episode",
+            "A Very Special Occasion",
+            "Pineapple Express Incident",
+            "The Unexpected Journey",
+            "Escape from Reality",
+            "A Bad Day at the Office",
+            "The Midnight Run",
+            "Return of the Legend"
+        ]
+        distractors = [f for f in fake_names if f.lower() != real_name.lower()]
+        distractors = random.sample(distractors, 3)
+        
+        options = distractors + [real_name]
+        random.shuffle(options)
+        correct_idx = options.index(real_name)
+        
+        questions.append({
+            "question": f"Which of the following is a real episode from this season?",
+            "options": options,
+            "correct_index": correct_idx
+        })
+    elif directors:
+        dir_name = directors[0]
+        other_dirs = ["Steven Spielberg", "Christopher Nolan", "Quentin Tarantino", "Martin Scorsese", "James Cameron"]
+        distractors = [d for d in other_dirs if d != dir_name]
+        distractors = random.sample(distractors, 3)
+        options = distractors + [dir_name]
+        random.shuffle(options)
+        correct_idx = options.index(dir_name)
+        
+        questions.append({
+            "question": f"Who directed the movie {series_name}?",
+            "options": options,
+            "correct_index": correct_idx
+        })
+        
+    # Make sure we always have at least 3 questions
+    if len(questions) < 3:
+        questions.append({
+            "question": "What is the standard aspect ratio of a standard definition DVD?",
+            "options": ["4:3", "16:9 Anamorphic", "2.39:1 Cinema", "1.33:1 IMAX"],
+            "correct_index": 1
+        })
+        questions.append({
+            "question": "Which video standard is traditionally used in Europe and Asia?",
+            "options": ["NTSC", "PAL", "SECAM", "ATSC"],
+            "correct_index": 1
+        })
+        
+    return questions[:3]
+
