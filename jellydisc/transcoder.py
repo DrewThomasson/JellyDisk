@@ -466,18 +466,21 @@ class Transcoder:
         has_subs = False
         if extract_subs:
             try:
-                extracted = self.extract_subtitles(input_path, srt_path)
-                if extracted and srt_path.exists() and srt_path.stat().st_size > 0:
+                if srt_path.exists() and srt_path.stat().st_size > 0:
                     has_subs = True
+                else:
+                    extracted = self.extract_subtitles(input_path, srt_path)
+                    if extracted and srt_path.exists() and srt_path.stat().st_size > 0:
+                        has_subs = True
             except Exception as e:
                 logger.warning(f"Could not extract subtitles for burn-in: {e}")
         
         # Build video filter to scale and apply subtitles if available
         if has_subs:
             # Escape path for FFmpeg subtitles filter
-            # FFmpeg subtitles filter on macOS/Linux expects escaped colons
-            sub_path_str = str(srt_path.absolute().as_posix()).replace(':', '\\:')
-            vf = f"scale={width}:{height},subtitles='{sub_path_str}'"
+            # FFmpeg subtitles filter on macOS/Linux expects escaped colons and single quotes
+            sub_path_str = str(srt_path.absolute().as_posix()).replace('\\', '/').replace("'", "'\\''").replace(':', '\\:')
+            vf = f"scale={width}:{height},subtitles=filename='{sub_path_str}'"
         else:
             vf = f"scale={width}:{height}"
             

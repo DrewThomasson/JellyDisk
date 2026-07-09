@@ -1397,7 +1397,26 @@ class JellyDiscApp(_BaseClass):
                     i / total_episodes
                 )
                 
-                if job.output_path.exists() and job.output_path.stat().st_size > 10 * 1024 * 1024:
+                # 1. Download subtitles first if requested
+                srt_path = job.output_path.with_suffix('.srt')
+                if include_subs:
+                    import re
+                    match = re.search(r'/Items/([^/]+)/Download', job.input_path)
+                    if match:
+                        ep_id = match.group(1)
+                        if not srt_path.exists():
+                            download_episode_subtitles(self.jellyfin_client, ep_id, srt_path)
+                        
+                # 2. Check if we can skip transcode
+                skip_transcode = job.output_path.exists() and job.output_path.stat().st_size > 10 * 1024 * 1024
+                if skip_transcode and include_subs:
+                    if not srt_path.exists():
+                        skip_transcode = False
+                    elif srt_path.stat().st_mtime > job.output_path.stat().st_mtime:
+                        # Subtitle file is newer than the video (newly downloaded)
+                        skip_transcode = False
+                    
+                if skip_transcode:
                     self._log(f"✓ E{job.episode_index} already transcoded. Skipping download and transcode.")
                     transcoded_files.append(job.output_path)
                     continue
@@ -1428,14 +1447,6 @@ class JellyDiscApp(_BaseClass):
                                     )
                                     
                     self._log(f"Finished downloading E{job.episode_index}. Transcoding locally...")
-                    
-                    if include_subs:
-                        import re
-                        match = re.search(r'/Items/([^/]+)/Download', job.input_path)
-                        if match:
-                            ep_id = match.group(1)
-                            srt_path = temp_input_path.with_suffix('.srt')
-                            download_episode_subtitles(self.jellyfin_client, ep_id, srt_path)
                             
                     def transcode_progress(progress: float):
                         self.after(0, lambda p=progress: self.task_progress.set(
@@ -2092,7 +2103,26 @@ def run_cli(args):
         # Transcode episodes
         transcoded_files = []
         for job in disc_plan.episodes:
-            if job.output_path.exists() and job.output_path.stat().st_size > 10 * 1024 * 1024:
+            # 1. Download subtitles first if requested
+            srt_path = job.output_path.with_suffix('.srt')
+            if include_subs:
+                import re
+                match = re.search(r'/Items/([^/]+)/Download', job.input_path)
+                if match:
+                    ep_id = match.group(1)
+                    if not srt_path.exists():
+                        download_episode_subtitles(client, ep_id, srt_path)
+                    
+            # 2. Check if we can skip transcode
+            skip_transcode = job.output_path.exists() and job.output_path.stat().st_size > 10 * 1024 * 1024
+            if skip_transcode and include_subs:
+                if not srt_path.exists():
+                    skip_transcode = False
+                elif srt_path.stat().st_mtime > job.output_path.stat().st_mtime:
+                    # Subtitle file is newer than the video (newly downloaded)
+                    skip_transcode = False
+                
+            if skip_transcode:
                 print(f"  E{job.episode_index} already transcoded. Skipping.")
                 transcoded_files.append(job.output_path)
                 continue
@@ -2107,14 +2137,6 @@ def run_cli(args):
                 sys.stdout.flush()
             client.download_media_file(season.episodes[job.episode_index - 1].id, temp_input, progress_callback=prog_ep)
             print()
-            
-            if include_subs:
-                import re
-                match = re.search(r'/Items/([^/]+)/Download', job.input_path)
-                if match:
-                    ep_id = match.group(1)
-                    srt_path = temp_input.with_suffix('.srt')
-                    download_episode_subtitles(client, ep_id, srt_path)
             
             print(f"  Transcoding E{job.episode_index}...")
             transcoder.transcode(str(temp_input), job.output_path, video_bitrate=disc_bitrate, extract_subs=include_subs)
@@ -2170,6 +2192,8 @@ def run_cli(args):
         print("  Packaging to ISO image...")
         clean_name = sanitize_filename(f"{series.name}_{season.name}_Disc{disc_num}")
         iso_path = output_dir / f"{clean_name}.iso"
+        if not output_dir.exists():
+            output_dir.mkdir(parents=True, exist_ok=True)
         burner.create_iso(dvd_dir, iso_path, volume_label=f"DISC{disc_num}")
         iso_files.append(iso_path)
         print(f"  ✓ ISO Created: {iso_path}")
@@ -2301,10 +2325,6 @@ def main():
         )
         app = JellyDiscApp()
         app.mainloop()
-
-
-if __name__ == "__main__":
-    main()
 
 
 if __name__ == "__main__":
