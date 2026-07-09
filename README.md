@@ -83,6 +83,50 @@ Make sure your virtual environment is active, then launch the main GUI applicati
 ```bash
 python -m jellydisc.main
 ```
+### Running in Headless CLI Mode
+
+JellyDisc can be run completely headless from the command line (ideal for home servers like Unraid, TrueNAS, or remote Linux boxes).
+
+To view all command line options and arguments:
+```bash
+python -m jellydisc.main --help
+```
+
+#### Automate DVD Creation
+To fetch, transcode, build DVD menus, generate ISOs, and print cover art in a single command:
+```bash
+python -m jellydisc.main --headless \
+  --server "https://yourjellyfin.com" \
+  --username "User" \
+  --password "Password" \
+  --show "Smiling Friends" \
+  --season "Season 1"
+```
+
+#### Automate Erasing and Burning
+To automatically erase a rewritable disc (`DVD-RW` / `CD-RW`) and burn the resulting ISOs directly to a specific burner:
+```bash
+python -m jellydisc.main --headless \
+  --server "https://yourjellyfin.com" \
+  --username "User" \
+  --password "Password" \
+  --show "Smiling Friends" \
+  --season "Season 1" \
+  --erase \
+  --burn \
+  --drive "/dev/rdisk4" \
+  --speed 4
+```
+
+#### Standalone Disc Utilities
+* **List detected optical drives:**
+  ```bash
+  python -m jellydisc.main --list-drives
+  ```
+* **Erase/Format a rewritable disc:**
+  ```bash
+  python -m jellydisc.main --erase --drive "/dev/rdisk4"
+  ```
 
 ### Project Structure
 

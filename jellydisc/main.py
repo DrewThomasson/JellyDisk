@@ -1721,24 +1721,447 @@ class JellyDiscApp(_BaseClass):
         self.after(0, update)
 
 
-def main():
-    """Run the JellyDisc application."""
-    if not GUI_AVAILABLE:
-        print("Error: GUI dependencies not available.")
-        print(f"Missing: {GUI_ERROR}")
-        print("\nTo install GUI dependencies:")
-        print("  pip install customtkinter Pillow")
-        print("\nOn Linux, you may also need:")
-        print("  sudo apt install python3-tk")
-        sys.exit(1)
-    
+def run_cli(args):
+    """Run JellyDisc in headless CLI mode."""
+    # Configure logging for CLI
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        format='%(asctime)s - %(levelname)s - %(message)s'
     )
     
-    app = JellyDiscApp()
-    app.mainloop()
+    # 1. Handle list-drives
+    if args.list_drives:
+        burner = Burner()
+        drives = burner.detect_drives()
+        if not drives:
+            print("No optical drives detected.")
+        else:
+            print("Detected Optical Drives:")
+            for d in drives:
+                print(f"  - {d.name} ({d.device_path})")
+        return
+
+    # 2. Handle erase
+    if args.erase and not args.show: # Standalone erase
+        burner = Burner()
+        drive = args.drive
+        if not drive:
+            drives = burner.detect_drives()
+            if drives:
+                drive = drives[0].device_path
+                print(f"No drive specified. Defaulting to first detected drive: {drives[0].name} ({drive})")
+            else:
+                print("❌ No optical drives detected.")
+                sys.exit(1)
+        print(f"Erasing media in drive: {drive}...")
+        success = burner.erase_media(device=drive)
+        if success:
+            print("✓ Disc erased successfully!")
+        else:
+            print("❌ Erase failed.")
+            sys.exit(1)
+        return
+
+    # 3. Connection details
+    server_url = args.server or os.environ.get("JELLYFIN_URL")
+    username = args.username or os.environ.get("JELLYFIN_USER")
+    password = args.password or os.environ.get("JELLYFIN_PASS")
+    show_query = args.show
+    
+    if not server_url or not username or not password or not show_query:
+        print("❌ Error: Missing required connection parameters (--server, --username, --password, --show)")
+        print("Use --help to see all options or set environment variables JELLYFIN_URL, JELLYFIN_USER, JELLYFIN_PASS.")
+        sys.exit(1)
+
+    print(f"Connecting to: {server_url}...")
+    client = JellyfinClient(server_url)
+    try:
+        client.authenticate(username, password)
+        print("✓ Connected successfully!")
+    except Exception as e:
+        print(f"❌ Connection failed: {e}")
+        sys.exit(1)
+        
+    # Search show
+    print(f"Searching for '{show_query}'...")
+    shows = client.search_library(show_query)
+    if not shows:
+        print(f"❌ Media '{show_query}' not found.")
+        sys.exit(1)
+        
+    series = shows[0]
+    print(f"✓ Found media: {series.name} (ID: {series.id})")
+    
+    # Detailed metadata
+    try:
+        details = client.get_item_details(series.id)
+        actors = []
+        for person in details.get("People", []):
+            if person.get("Type") == "Actor":
+                name = person.get("Name")
+                role = person.get("Role")
+                actors.append(f"{name} as {role}" if role else name)
+        series.actors = actors[:10]
+        series.overview = details.get("Overview", "")
+    except Exception as e:
+        print(f"Warning: Failed to fetch metadata: {e}")
+        
+    # Seasons
+    seasons = client.get_seasons(series.id)
+    if not seasons:
+        print("❌ No seasons found.")
+        sys.exit(1)
+        
+    season = None
+    if getattr(series, "type", "Series") == "Movie":
+        season = seasons[0]
+    elif args.season:
+        for s in seasons:
+            if str(s.index_number) == str(args.season) or args.season.lower() in s.name.lower():
+                season = s
+                break
+        if not season:
+            print(f"❌ Season '{args.season}' not found.")
+            sys.exit(1)
+    else:
+        season = seasons[0]
+        print(f"Defaulting to Season: {season.name}")
+        
+    # Episodes
+    print("Fetching episode details...")
+    try:
+        season = client.get_season_details(series.id, season.id)
+    except Exception as e:
+        print(f"❌ Failed to fetch season details: {e}")
+        sys.exit(1)
+        
+    if not season.episodes:
+        print("❌ No episodes found.")
+        sys.exit(1)
+        
+    print(f"✓ Selected: {season.name} with {len(season.episodes)} episodes.")
+    
+    # Setup working folders
+    assets_dir = Path("assets")
+    staging_dir = Path("staging")
+    output_dir = Path("output")
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    series_folder = sanitize_filename(series.name)
+    season_folder = sanitize_filename(season.name)
+    current_staging_dir = staging_dir / series_folder / season_folder
+    current_staging_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Plan spanning
+    video_standard = VideoStandard.NTSC if args.standard == "NTSC" else VideoStandard.PAL
+    menu_style = MenuStyle.MODERN if args.style == "Modern" else MenuStyle.RETRO
+    include_subs = not args.no_subs
+    include_trailer = not args.no_trailer
+    
+    transcoder = Transcoder(current_staging_dir, VideoSettings(video_standard))
+    
+    jobs = []
+    for ep in season.episodes:
+        filename = f"ep{ep.index_number:02d}.mpg"
+        dest_path = current_staging_dir / filename
+        job = TranscodeJob(
+            input_path=client.get_stream_url(ep.id),
+            output_path=dest_path,
+            episode_name=ep.name,
+            episode_index=ep.index_number,
+            duration_seconds=ep.runtime_minutes * 60
+        )
+        jobs.append(job)
+        
+    disc_plans = transcoder.plan_disc_spanning(jobs)
+    print(f"\n--- Disc Spanning Plan ({len(disc_plans)} disc(s) required) ---")
+    for p in disc_plans:
+        first = p.episodes[0].episode_index
+        last = p.episodes[-1].episode_index
+        print(f"  Disc {p.disc_number}: Episodes {first}-{last} ({p.total_minutes:.0f} min, ~{p.estimated_size_mb:.0f} MB)")
+        
+    # Download Series/Season images
+    print("\nDownloading show assets...")
+    backdrop_path = None
+    if series.backdrop_image_url:
+        try:
+            backdrop_path = assets_dir / "backdrop.jpg"
+            client.download_image(series.backdrop_image_url, backdrop_path)
+        except Exception as e:
+            print(f"Warning: Failed to download backdrop: {e}")
+            backdrop_path = None
+            
+    logo_path = None
+    if series.logo_image_url:
+        try:
+            logo_path = assets_dir / "logo.png"
+            client.download_image(series.logo_image_url, logo_path)
+        except Exception as e:
+            print(f"Warning: Failed to download logo: {e}")
+            logo_path = None
+            
+    season_poster_path = None
+    if season.primary_image_url:
+        try:
+            season_poster_path = assets_dir / "season_poster.jpg"
+            client.download_image(season.primary_image_url, season_poster_path)
+        except Exception as e:
+            print(f"Warning: Failed to download season poster: {e}")
+            season_poster_path = None
+            
+    theme_path = None
+    try:
+        theme_url = client.get_theme_song_url(series.id)
+        if theme_url:
+            theme_path = assets_dir / "theme.mp3"
+            client.download_image(theme_url, theme_path)
+    except Exception as e:
+        print(f"Warning: Failed to download theme song: {e}")
+        theme_path = None
+        
+    # Download episode thumbnails
+    ep_thumbs = {}
+    for ep in season.episodes:
+        if ep.primary_image_url:
+            t_path = assets_dir / f"ep_{ep.index_number}_thumb.jpg"
+            try:
+                client.download_image(ep.primary_image_url, t_path)
+                ep_thumbs[ep.index_number] = t_path
+            except Exception:
+                pass
+                
+    # Download/Transcode trailer if requested
+    trailer_path = None
+    if include_trailer:
+        print("Checking for trailers...")
+        try:
+            trailers = client.get_local_trailers(series.id)
+            if trailers:
+                trailer_item = trailers[0]
+                trailer_path = current_staging_dir / "trailer.mpg"
+                if not trailer_path.exists():
+                    temp_trailer = current_staging_dir / "temp_trailer.tmp"
+                    client.download_media_file(trailer_item["Id"], temp_trailer)
+                    transcoder.transcode(str(temp_trailer), trailer_path, extract_subs=False)
+                    temp_trailer.unlink()
+        except Exception as e:
+            print(f"Warning: Failed to download/transcode trailer: {e}")
+            trailer_path = None
+
+    # Process each disc plan
+    menu_config = MenuConfig(
+        style=menu_style,
+        title=f"{series.name} - {season.name}" if getattr(series, "type", "Series") != "Movie" else series.name,
+        season_overview=season.overview or series.overview or "",
+        include_subtitles=include_subs,
+        include_cast=True,
+        actors=series.actors,
+        include_trailer=(trailer_path is not None)
+    )
+    
+    menu_builder = MenuBuilder(current_staging_dir, menu_config)
+    burner = Burner(output_dir)
+    iso_files = []
+    
+    for disc_plan in disc_plans:
+        disc_num = disc_plan.disc_number
+        print(f"\n--- Authoring Disc {disc_num} of {len(disc_plans)} ---")
+        
+        disc_bitrate = transcoder.calculate_optimal_bitrate(disc_plan.total_minutes)
+        print(f"Optimal video bitrate calculated: {disc_bitrate} kbps")
+        
+        # Transcode episodes
+        transcoded_files = []
+        for job in disc_plan.episodes:
+            if job.output_path.exists() and job.output_path.stat().st_size > 10 * 1024 * 1024:
+                print(f"  E{job.episode_index} already transcoded. Skipping.")
+                transcoded_files.append(job.output_path)
+                continue
+                
+            temp_input = current_staging_dir / f"temp_input_{job.episode_index}.tmp"
+            print(f"  Downloading E{job.episode_index}...")
+            client.download_media_file(season.episodes[job.episode_index - 1].id, temp_input)
+            
+            print(f"  Transcoding E{job.episode_index}...")
+            transcoder.transcode(str(temp_input), job.output_path, video_bitrate=disc_bitrate, extract_subs=include_subs)
+            temp_input.unlink()
+            transcoded_files.append(job.output_path)
+            print(f"  ✓ E{job.episode_index} transcode complete.")
+            
+        # Menus
+        print("  Generating menus...")
+        disc_trailer = trailer_path if disc_num == 1 else None
+        show_ep_select = len(disc_plan.episodes) > 1
+        
+        m_bg, m_hl, m_sel, m_btns = menu_builder.generate_main_menu(
+            backdrop_path, logo_path, has_trailer=(disc_trailer is not None), show_episode_select=show_ep_select
+        )
+        m_base_vid = menu_builder.generate_menu_video(m_bg, "menu_main_base.mpg", theme_path)
+        menu_main_vid = menu_builder.compile_interactive_menu(m_base_vid, m_hl, m_sel, m_btns, current_staging_dir / "menu_main.mpg")
+        
+        menu_cast_vid = None
+        if menu_config.include_cast:
+            c_bg, c_hl, c_sel, c_btns = menu_builder.generate_cast_menu(
+                backdrop_path, logo_path, overview=series.overview, actors=series.actors
+            )
+            c_base_vid = menu_builder.generate_menu_video(c_bg, "menu_cast_base.mpg")
+            menu_cast_vid = menu_builder.compile_interactive_menu(c_base_vid, c_hl, c_sel, c_btns, current_staging_dir / "menu_cast.mpg")
+            
+        menu_episode_vids = []
+        if show_ep_select:
+            episodes_thumbs_list = []
+            for job in disc_plan.episodes:
+                episodes_thumbs_list.append(
+                    EpisodeThumbnail(
+                        episode_index=job.episode_index,
+                        title=job.episode_name,
+                        thumbnail_path=ep_thumbs.get(job.episode_index)
+                    )
+                )
+            total_pages = (len(episodes_thumbs_list) + 5) // 6
+            for p_idx in range(total_pages):
+                ep_bg, ep_hl, ep_sel, ep_btns = menu_builder.generate_episode_menu(backdrop_path, logo_path, episodes_thumbs_list, p_idx, total_pages)
+                ep_base_vid = menu_builder.generate_menu_video(ep_bg, f"menu_episodes_base_{p_idx+1}.mpg")
+                ep_vid = menu_builder.compile_interactive_menu(ep_base_vid, ep_hl, ep_sel, ep_btns, current_staging_dir / f"menu_episodes_{p_idx+1}.mpg")
+                menu_episode_vids.append(ep_vid)
+                
+        # dvdauthor structure
+        print("  Assembling DVD filesystem structure...")
+        xml_path = menu_builder.generate_dvdauthor_xml(
+            transcoded_files, menu_main_vid, menu_episode_vids, menu_cast_path=menu_cast_vid, menu_trailer_path=disc_trailer
+        )
+        dvd_dir = menu_builder.build_dvd_structure(xml_path)
+        
+        # ISO
+        print("  Packaging to ISO image...")
+        clean_name = sanitize_filename(f"{series.name}_{season.name}_Disc{disc_num}")
+        iso_path = output_dir / f"{clean_name}.iso"
+        burner.create_iso(dvd_dir, iso_path, volume_label=f"DISC{disc_num}")
+        iso_files.append(iso_path)
+        print(f"  ✓ ISO Created: {iso_path}")
+
+    # Generate printables
+    print("\n--- Generating Printable Artwork ---")
+    art_gen = ArtGenerator(assets_dir)
+    base_name = sanitize_filename(f"{series.name}_{season.name}")
+    
+    cover_pdf = output_dir / f"{base_name}_DVD_Cover.pdf"
+    print("Generating Cover wrap PDF...")
+    art_gen.generate_dvd_wrap(
+        series_name=series.name,
+        season_name=season.name,
+        overview=season.overview or series.overview or "",
+        episodes=season.episodes,
+        backdrop_path=backdrop_path,
+        logo_path=logo_path,
+        season_poster_path=season_poster_path,
+        output_path=cover_pdf
+    )
+    print(f"✓ DVD Cover wrap PDF saved to: {cover_pdf}")
+    
+    folio_pdf = output_dir / f"{base_name}_Episode_Guide.pdf"
+    print("Generating Booklet Insert PDF...")
+    art_gen.generate_episode_folio(
+        series_name=series.name,
+        season_name=season.name,
+        overview=season.overview or series.overview or "",
+        episodes=season.episodes,
+        backdrop_path=backdrop_path,
+        logo_path=logo_path,
+        output_path=folio_pdf,
+        actors=series.actors
+    )
+    print(f"✓ Episode Guide Booklet PDF saved to: {folio_pdf}")
+    
+    print("Generating Disc Face Label PDFs...")
+    total_discs = len(disc_plans)
+    for p in disc_plans:
+        label_pdf = output_dir / f"{base_name}_Disc_{p.disc_number}_Label.pdf"
+        art_gen.generate_disc_label(
+            series_name=series.name,
+            season_name=season.name,
+            disc_num=p.disc_number,
+            total_discs=total_discs,
+            episodes=p.episodes,
+            backdrop_path=backdrop_path,
+            logo_path=logo_path,
+            output_path=label_pdf
+        )
+        print(f"✓ Disc {p.disc_number} Label PDF saved to: {label_pdf}")
+        
+    # Erase / Burn if requested
+    if args.burn and iso_files:
+        print("\n--- Burning to Optical Media ---")
+        drive = args.drive
+        if not drive:
+            detected = burner.detect_drives()
+            if detected:
+                drive = detected[0].device_path
+                print(f"No drive specified. Defaulting to first detected drive: {detected[0].name} ({drive})")
+            else:
+                print("❌ No optical drives detected for burning.")
+                sys.exit(1)
+                
+        if args.erase:
+            print(f"Erasing rewritable media in drive {drive}...")
+            burner.erase_media(device=drive)
+            
+        print(f"Burning ISO(s) to drive {drive} at speed {args.speed}x...")
+        success = burner.burn_multi_disc(iso_files, device=drive, speed=args.speed)
+        if success:
+            print("✓ All discs burned successfully!")
+        else:
+            print("❌ Burning failed.")
+            sys.exit(1)
+
+    print("\n🎉 Headless DVD Authoring Process Completed Successfully!")
+
+
+def main():
+    """Run the JellyDisc application."""
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description="JellyDisc - Desktop & Headless DVD Authoring Suite",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser.add_argument("--headless", action="store_true", help="Run in headless CLI mode without opening GUI")
+    parser.add_argument("--server", help="Jellyfin server URL (or JELLYFIN_URL environment variable)")
+    parser.add_argument("--username", help="Jellyfin username (or JELLYFIN_USER environment variable)")
+    parser.add_argument("--password", help="Jellyfin password (or JELLYFIN_PASS environment variable)")
+    parser.add_argument("--show", help="Name of TV Show or Movie to fetch and author")
+    parser.add_argument("--season", help="Season number or name (e.g. '1' or 'Season 1')")
+    parser.add_argument("--standard", choices=["NTSC", "PAL"], default="NTSC", help="DVD video standard")
+    parser.add_argument("--style", choices=["Modern", "Retro"], default="Modern", help="Interactive menu layout style")
+    parser.add_argument("--no-subs", action="store_true", help="Disable parsing and importing subtitles")
+    parser.add_argument("--no-trailer", action="store_true", help="Disable inclusion of local trailers")
+    parser.add_argument("--burn", action="store_true", help="Automatically burn created ISOs to disc")
+    parser.add_argument("--drive", help="Optical drive mount path or system dev path (e.g. /dev/rdisk4)")
+    parser.add_argument("--speed", type=int, default=4, help="Write speed for optical disc burning")
+    parser.add_argument("--erase", action="store_true", help="Erase/Format rewritable media in the optical drive")
+    parser.add_argument("--list-drives", action="store_true", help="List all detected system optical drives and exit")
+    
+    args = parser.parse_args()
+
+    # Determine if CLI execution is forced or fallback
+    is_cli = args.headless or args.list_drives or args.erase or args.show or not GUI_AVAILABLE
+    
+    if is_cli:
+        run_cli(args)
+    else:
+        # Launch GUI
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        app = JellyDiscApp()
+        app.mainloop()
+
+
+if __name__ == "__main__":
+    main()
 
 
 if __name__ == "__main__":
