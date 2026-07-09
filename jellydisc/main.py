@@ -1775,7 +1775,11 @@ class JellyDiscApp(_BaseClass):
                         backdrop_path=backdrop_path,
                         logo_path=logo_path,
                         season_poster_path=season_poster_path,
-                        output_path=cover_pdf_path
+                        output_path=cover_pdf_path,
+                        actors=getattr(self.selected_series, "actors", []),
+                        directors=getattr(self.selected_series, "directors", []),
+                        writers=getattr(self.selected_series, "writers", []),
+                        dvd_capacity_mb=dvd_capacity_mb
                     )
                     self._log(f"✓ DVD Cover PDF saved to: {cover_pdf_path}")
                     
@@ -2587,7 +2591,11 @@ def run_cli(args):
         backdrop_path=backdrop_path,
         logo_path=logo_path,
         season_poster_path=season_poster_path,
-        output_path=cover_pdf
+        output_path=cover_pdf,
+        actors=getattr(series, "actors", []),
+        directors=getattr(series, "directors", []),
+        writers=getattr(series, "writers", []),
+        dvd_capacity_mb=dvd_capacity_mb
     )
     print(f"✓ DVD Cover wrap PDF saved to: {cover_pdf}")
     

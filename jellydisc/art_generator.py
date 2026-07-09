@@ -258,7 +258,11 @@ class ArtGenerator:
                           backdrop_path: Optional[Path],
                           logo_path: Optional[Path],
                           season_poster_path: Optional[Path],
-                          output_path: Path) -> Path:
+                          output_path: Path,
+                          actors: Optional[List[str]] = None,
+                          directors: Optional[List[str]] = None,
+                          writers: Optional[List[str]] = None,
+                          dvd_capacity_mb: int = 4100) -> Path:
         """
         Generate a printable DVD case cover wrap (back, spine, and front).
         Saves as a high-quality PDF at 300 DPI.
@@ -324,23 +328,24 @@ class ArtGenerator:
                 y_offset += 100
 
         # Draw season name on front cover (lower-middle)
-        font_season = self._get_font(bold=True, size=55)
-        season_str = season_name.upper()
-        try:
-            sw = draw.textlength(season_str, font=font_season)
-        except AttributeError:
-            sw = draw.textsize(season_str, font=font_season)[0]
-        sx = front_x + (COV_PAGE - int(sw)) // 2
-        sy = 1600
-        
-        # Transparent background band behind season title for readability
-        band_h = 130
-        band = Image.new('RGBA', (COV_PAGE, band_h), (0, 0, 0, 160))
-        canvas.paste(band, (front_x, sy - 30), band)
-        
-        # Draw season text using our accent color
-        draw.text((sx + 3, sy + 3), season_str, fill=(0, 0, 0, 220), font=font_season)
-        draw.text((sx, sy), season_str, fill=accent_color, font=font_season)
+        if season_name.lower() != "movie":
+            font_season = self._get_font(bold=True, size=55)
+            season_str = season_name.upper()
+            try:
+                sw = draw.textlength(season_str, font=font_season)
+            except AttributeError:
+                sw = draw.textsize(season_str, font=font_season)[0]
+            sx = front_x + (COV_PAGE - int(sw)) // 2
+            sy = 1600
+            
+            # Transparent background band behind season title for readability
+            band_h = 130
+            band = Image.new('RGBA', (COV_PAGE, band_h), (0, 0, 0, 160))
+            canvas.paste(band, (front_x, sy - 30), band)
+            
+            # Draw season text using our accent color
+            draw.text((sx + 3, sy + 3), season_str, fill=(0, 0, 0, 220), font=font_season)
+            draw.text((sx, sy), season_str, fill=accent_color, font=font_season)
 
         # Small "DVD VIDEO" format badge at bottom
         font_badge = self._get_font(bold=True, size=24)
@@ -376,7 +381,10 @@ class ArtGenerator:
 
         # Draw rotated Spine Text (Series Name - Season Name)
         spine_font = self._get_font(bold=True, size=48)
-        spine_text_str = f"{series_name.upper()}  —  {season_name.upper()}"
+        if season_name.lower() == "movie":
+            spine_text_str = series_name.upper()
+        else:
+            spine_text_str = f"{series_name.upper()}  —  {season_name.upper()}"
         
         text_img = Image.new('RGBA', (1600, COV_SPINE), (0, 0, 0, 0))
         text_draw = ImageDraw.Draw(text_img)
@@ -430,7 +438,8 @@ class ArtGenerator:
         
         y_offset += 65
         font_back_season = self._get_font(bold=True, size=36)
-        draw.text((margin, y_offset), season_name, fill=accent_color, font=font_back_season)
+        back_season_str = "FEATURE FILM" if season_name.lower() == "movie" else season_name
+        draw.text((margin, y_offset), back_season_str, fill=accent_color, font=font_back_season)
         
         # Draw thin separator line (using tinted accent color)
         y_offset += 60
@@ -449,45 +458,76 @@ class ArtGenerator:
             draw.text((margin, y_offset), "...", fill=(230, 230, 240, 255), font=font_overview)
             y_offset += 32
             
-        # Draw "EPISODES" header
-        y_offset += 50
-        font_ep_header = self._get_font(bold=True, size=28)
-        draw.text((margin, y_offset), "EPISODES", fill=(255, 255, 255, 255), font=font_ep_header)
-        
-        y_offset += 45
-        font_ep_item = self._get_font(bold=False, size=22)
-        
-        max_per_col = 8
-        col_w = text_w // 2
-        
-        for idx, ep in enumerate(episodes[:16]):
-            col = idx // max_per_col
-            row = idx % max_per_col
+        # Draw "EPISODES" header or cast list
+        if season_name.lower() != "movie":
+            y_offset += 50
+            font_ep_header = self._get_font(bold=True, size=28)
+            draw.text((margin, y_offset), "EPISODES", fill=(255, 255, 255, 255), font=font_ep_header)
             
-            ex = margin + (col * col_w)
-            ey = y_offset + (row * 36)
+            y_offset += 45
+            font_ep_item = self._get_font(bold=False, size=22)
             
-            ep_idx = getattr(ep, "index_number", getattr(ep, "episode_index", idx + 1))
-            ep_name = getattr(ep, "name", getattr(ep, "episode_name", ""))
+            max_per_col = 8
+            col_w = text_w // 2
             
-            runtime = f" ({int(ep.runtime_minutes)}m)" if getattr(ep, "runtime_minutes", 0) > 0 else ""
-            ep_text = f"{ep_idx:02d}. {ep_name}{runtime}"
-            
-            try:
-                ep_len = draw.textlength(ep_text, font=font_ep_item)
-            except AttributeError:
-                ep_len = draw.textsize(ep_text, font=font_ep_item)[0]
+            for idx, ep in enumerate(episodes[:16]):
+                col = idx // max_per_col
+                row = idx % max_per_col
                 
-            if ep_len > col_w - 40:
-                while ep_len > col_w - 60 and len(ep_text) > 5:
-                    ep_text = ep_text[:-2]
-                    try:
-                        ep_len = draw.textlength(ep_text + "...", font=font_ep_item)
-                    except AttributeError:
-                        ep_len = draw.textsize(ep_text + "...", font=font_ep_item)[0]
-                ep_text += "..."
+                ex = margin + (col * col_w)
+                ey = y_offset + (row * 36)
                 
-            draw.text((ex, ey), ep_text, fill=(215, 215, 220, 255), font=font_ep_item)
+                ep_idx = getattr(ep, "index_number", getattr(ep, "episode_index", idx + 1))
+                ep_name = getattr(ep, "name", getattr(ep, "episode_name", ""))
+                
+                runtime = f" ({int(ep.runtime_minutes)}m)" if getattr(ep, "runtime_minutes", 0) > 0 else ""
+                ep_text = f"{ep_idx:02d}. {ep_name}{runtime}"
+                
+                try:
+                    ep_len = draw.textlength(ep_text, font=font_ep_item)
+                except AttributeError:
+                    ep_len = draw.textsize(ep_text, font=font_ep_item)[0]
+                    
+                if ep_len > col_w - 40:
+                    while ep_len > col_w - 60 and len(ep_text) > 5:
+                        ep_text = ep_text[:-2]
+                        try:
+                            ep_len = draw.textlength(ep_text + "...", font=font_ep_item)
+                        except AttributeError:
+                            ep_len = draw.textsize(ep_text + "...", font=font_ep_item)[0]
+                    ep_text += "..."
+                    
+                draw.text((ex, ey), ep_text, fill=(215, 215, 220, 255), font=font_ep_item)
+        else:
+            y_offset += 50
+            font_cast_header = self._get_font(bold=True, size=28)
+            draw.text((margin, y_offset), "CAST & CREW", fill=(255, 255, 255, 255), font=font_cast_header)
+            
+            y_offset += 45
+            font_c_label = self._get_font(bold=True, size=22)
+            font_c_val = self._get_font(bold=False, size=22)
+            
+            if directors:
+                draw.text((margin, y_offset), "DIRECTED BY:", fill=accent_color, font=font_c_label)
+                draw.text((margin + 200, y_offset), ", ".join(directors[:3]), fill=(230, 230, 240, 255), font=font_c_val)
+                y_offset += 36
+                
+            if writers:
+                draw.text((margin, y_offset), "WRITTEN BY:", fill=accent_color, font=font_c_label)
+                draw.text((margin + 200, y_offset), ", ".join(writers[:3]), fill=(230, 230, 240, 255), font=font_c_val)
+                y_offset += 36
+                
+            if actors:
+                draw.text((margin, y_offset), "STARRING:", fill=accent_color, font=font_c_label)
+                y_offset += 36
+                col_w = text_w // 2
+                for idx, actor in enumerate(actors[:8]):
+                    col = idx // 4
+                    row = idx % 4
+                    actor_clean = actor.split(" as ")[0]
+                    ex = margin + 50 + (col * col_w)
+                    ey = y_offset + (row * 32)
+                    draw.text((ex, ey), actor_clean, fill=(215, 215, 220, 255), font=font_c_val)
             
         # Draw 3 Episode Thumbnails in a nice strip
         thumb_y = 1590
@@ -524,7 +564,8 @@ class ArtGenerator:
                        fill=(0, 0, 0, 100), 
                        outline=(accent_rgb[0], accent_rgb[1], accent_rgb[2], 50), width=2)
         
-        specs_text = "NTSC  |  MPEG-2  |  COLOR  |  DOLBY DIGITAL STEREO  |  16:9 ANAMORPHIC  |  REGION 0  |  DVD-9"
+        specs_disc = "DVD-9" if dvd_capacity_mb == 7900 else "DVD-5"
+        specs_text = f"NTSC  |  MPEG-2  |  COLOR  |  DOLBY DIGITAL STEREO  |  16:9 ANAMORPHIC  |  REGION 0  |  {specs_disc}"
         font_specs = self._get_font(bold=True, size=20)
         try:
             spec_w = draw.textlength(specs_text, font=font_specs)
@@ -617,7 +658,7 @@ class ArtGenerator:
         c_draw.text(((BK_WIDTH - int(sw)) // 2, 1000), season_str, fill=accent_color, font=font_season)
         
         font_sub = self._get_font(bold=True, size=32)
-        guide_text = "E P I S O D E   G U I D E"
+        guide_text = "P R O D U C T I O N   N O T E S" if season_name.lower() == "movie" else "E P I S O D E   G U I D E"
         try:
             gw = c_draw.textlength(guide_text, font=font_sub)
         except AttributeError:
@@ -653,7 +694,10 @@ class ArtGenerator:
             p_draw.line([(100, 100), (BK_WIDTH - 100, 100)], fill=(accent_color[0], accent_color[1], accent_color[2], 40), width=2)
             p_draw.line([(100, BK_HEIGHT - 100), (BK_WIDTH - 100, BK_HEIGHT - 100)], fill=(accent_color[0], accent_color[1], accent_color[2], 40), width=2)
             
-            header_txt = f"{series_name.upper()}  |  {season_name.upper()}"
+            if season_name.lower() == "movie":
+                header_txt = series_name.upper()
+            else:
+                header_txt = f"{series_name.upper()}  |  {season_name.upper()}"
             font_hdr = self._get_font(bold=True, size=18)
             p_draw.text((100, 60), header_txt, fill=(150, 150, 160), font=font_hdr)
             
@@ -700,7 +744,10 @@ class ArtGenerator:
                 info_x = thumb_x + thumb_w + 50
                 info_w = BK_WIDTH - info_x - 100
                 
-                title_str = f"E{curr_ep_idx:02d}. {curr_ep_name}"
+                if season_name.lower() == "movie":
+                    title_str = curr_ep_name
+                else:
+                    title_str = f"E{curr_ep_idx:02d}. {curr_ep_name}"
                 title_lines = self._wrap_text(title_str, font_ep_title, info_w, p_draw)
                 ty = y_start + 35
                 
