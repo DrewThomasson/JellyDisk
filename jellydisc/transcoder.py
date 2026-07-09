@@ -120,7 +120,8 @@ class Transcoder:
         self,
         staging_dir: Path,
         video_settings: Optional[VideoSettings] = None,
-        audio_settings: Optional[AudioSettings] = None
+        audio_settings: Optional[AudioSettings] = None,
+        dvd_capacity_mb: int = 4100
     ):
         """
         Initialize the transcoder.
@@ -135,6 +136,7 @@ class Transcoder:
         
         self.video_settings = video_settings or VideoSettings()
         self.audio_settings = audio_settings or AudioSettings()
+        self.dvd_capacity_mb = dvd_capacity_mb
         
         # Verify FFmpeg is available
         self._ffmpeg_path = self._find_ffmpeg()
@@ -277,7 +279,7 @@ class Transcoder:
             Optimal video bitrate in bits per second
         """
         if available_space_mb is None:
-            available_space_mb = self.DVD_CAPACITY_MB - self.MENU_OVERHEAD_MB
+            available_space_mb = self.dvd_capacity_mb - self.MENU_OVERHEAD_MB
         
         # Account for audio bitrate
         audio_bitrate_kbps = int(self.audio_settings.bitrate.replace('k', ''))
@@ -333,7 +335,7 @@ class Transcoder:
         total_size_mb = (total_bitrate * total_minutes * 60) / 8 / 1024 / 1024
         
         # Check if spanning is needed
-        usable_capacity = self.DVD_CAPACITY_MB - self.MENU_OVERHEAD_MB
+        usable_capacity = self.dvd_capacity_mb - self.MENU_OVERHEAD_MB
         
         if total_size_mb <= usable_capacity:
             # Everything fits on one disc

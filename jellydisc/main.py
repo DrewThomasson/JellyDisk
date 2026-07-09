@@ -478,14 +478,21 @@ class JellyDiscApp(_BaseClass):
         )
         folio_check.grid(row=7, column=1, sticky="w", padx=10, pady=10)
 
-        # Generate Printable Disc Label
-        self.disc_label_var = ctk.BooleanVar(value=True)
-        disc_label_check = ctk.CTkCheckBox(
-            settings_frame,
-            text="Generate Printable Disc Face Labels (PDF)",
-            variable=self.disc_label_var
-        )
         disc_label_check.grid(row=8, column=1, sticky="w", padx=10, pady=10)
+        
+        # Disc Size
+        disc_size_label = ctk.CTkLabel(settings_frame, text="Disc Capacity:")
+        disc_size_label.grid(row=9, column=0, sticky="e", padx=10, pady=10)
+        
+        self.disc_size_var = ctk.StringVar(value="DVD-5 (4.7 GB)")
+        disc_size_dropdown = ctk.CTkComboBox(
+            settings_frame,
+            values=["DVD-5 (4.7 GB)", "DVD-9 (8.5 GB)"],
+            variable=self.disc_size_var,
+            width=200,
+            command=self._on_disc_size_changed
+        )
+        disc_size_dropdown.grid(row=9, column=1, sticky="w", padx=10, pady=10)
         
         # Summary frame
         self.config_summary = ctk.CTkFrame(frame)
@@ -1088,13 +1095,26 @@ class JellyDiscApp(_BaseClass):
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
+    def _on_disc_size_changed(self, value):
+        if value == "DVD-9 (8.5 GB)":
+            from tkinter import messagebox
+            messagebox.showwarning(
+                "DVD-9 (Dual Layer) Warning",
+                "You have selected DVD-9 (Dual Layer).\n\n"
+                "Burned dual-layer discs (DVD+R DL) have lower reflectivity and a physical layer break, "
+                "which may make them unreadable or prone to freezing/stuttering on older or legacy standalone DVD players.\n\n"
+                "If you are burning for legacy hardware compatibility, DVD-5 (Single Layer) is highly recommended."
+            )
+        self._create_disc_plan()
+
     def _create_disc_plan(self):
         """Create a disc spanning plan for the selected season."""
         if not self.selected_season:
             return
         
         try:
-            transcoder = Transcoder(self.current_staging_dir)
+            dvd_capacity_mb = 7900 if "DVD-9" in self.disc_size_var.get() else 4100
+            transcoder = Transcoder(self.current_staging_dir, dvd_capacity_mb=dvd_capacity_mb)
             
             # Migrate any cached transcode files from the root staging directory to the show-specific subfolder
             import shutil
@@ -1218,10 +1238,13 @@ class JellyDiscApp(_BaseClass):
         include_subs = self.subtitles_var.get()
         include_trailer = self.trailer_var.get()
         
+        dvd_capacity_mb = 7900 if "DVD-9" in self.disc_size_var.get() else 4100
+        
         # Initialize components
         transcoder = Transcoder(
             self.current_staging_dir,
-            VideoSettings(video_standard)
+            VideoSettings(video_standard),
+            dvd_capacity_mb=dvd_capacity_mb
         )
         
         # Format title cleanly for movies
@@ -2111,7 +2134,11 @@ def run_cli(args):
     burn_disc = args.burn
     erase_disc = args.erase
     drive_path = args.drive
+    dvd_capacity_mb = 7900 if args.disc_size == "dvd-9" else 4100
     
+    if args.disc_size == "dvd-9":
+        print("⚠️ Warning: You selected DVD-9 (Dual Layer). Burned dual-layer media may suffer from playback compatibility issues on legacy players.")
+        
     if missing_args and is_interactive:
         # Prompt for optional configs
         if not args.no_subs:
@@ -2131,6 +2158,22 @@ def run_cli(args):
         if std_choice == '2':
             video_standard = VideoStandard.PAL
             
+        # Prompt for disc size
+        print("📀 Select target disc size:")
+        print("  [1] DVD-5 (Single Layer - 4.7 GB) [Default]")
+        print("  [2] DVD-9 (Dual Layer - 8.5 GB)")
+        disc_choice = input("Select option [1-2]: ").strip()
+        if disc_choice == '2':
+            print("\n⚠️ WARNING: Burned dual-layer discs (DVD+R DL) have much lower reflectivity")
+            print("   and a physical layer break. This can cause freezing, stuttering, or read")
+            print("   failures on older/legacy standalone DVD players.\n")
+            confirm_dl = input("Are you sure you want to proceed with DVD-9? (y/N): ").strip().lower()
+            if confirm_dl in ('y', 'yes'):
+                dvd_capacity_mb = 7900
+            else:
+                dvd_capacity_mb = 4100
+                print("Resetting back to DVD-5 capacity.")
+                
         if not args.burn:
             burn_choice = input("💿 Do you want to burn the final ISO to a physical DVD disc? (y/N): ").strip().lower()
             if burn_choice in ('y', 'yes'):
@@ -2180,6 +2223,7 @@ def run_cli(args):
         print(f"  Trailers   : {'Yes' if include_trailer else 'No'}")
         print(f"  Menu Style : {menu_style.name}")
         print(f"  Standard   : {video_standard.name}")
+        print(f"  Disc Size  : {'DVD-9 (Dual Layer) ⚠️ Prone to issues on legacy players' if dvd_capacity_mb == 7900 else 'DVD-5 (Single Layer)'}")
         print(f"  Burn Disc  : {'Yes' if burn_disc else 'No'}")
         if burn_disc:
             print(f"    - Drive  : {drive_path}")
@@ -2190,7 +2234,7 @@ def run_cli(args):
             print("Aborted.")
             sys.exit(0)
     
-    transcoder = Transcoder(current_staging_dir, VideoSettings(video_standard))
+    transcoder = Transcoder(current_staging_dir, VideoSettings(video_standard), dvd_capacity_mb=dvd_capacity_mb)
     
     jobs = []
     for ep in season.episodes:
@@ -2626,6 +2670,7 @@ def main():
     parser.add_argument("--show", help="Name of TV Show or Movie to fetch and author")
     parser.add_argument("--season", help="Season number or name (e.g. '1' or 'Season 1')")
     parser.add_argument("--standard", choices=["NTSC", "PAL"], default="NTSC", help="DVD video standard")
+    parser.add_argument("--disc-size", choices=["dvd-5", "dvd-9"], default="dvd-5", help="Target DVD disc size capacity")
     parser.add_argument("--style", choices=["Modern", "Retro"], default="Modern", help="Interactive menu layout style")
     parser.add_argument("--no-subs", action="store_true", help="Disable parsing and importing subtitles")
     parser.add_argument("--no-trailer", action="store_true", help="Disable inclusion of local trailers")
