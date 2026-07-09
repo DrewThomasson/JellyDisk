@@ -1429,6 +1429,14 @@ class JellyDiscApp(_BaseClass):
                                     
                     self._log(f"Finished downloading E{job.episode_index}. Transcoding locally...")
                     
+                    if include_subs:
+                        import re
+                        match = re.search(r'/Items/([^/]+)/Download', job.input_path)
+                        if match:
+                            ep_id = match.group(1)
+                            srt_path = temp_input_path.with_suffix('.srt')
+                            download_episode_subtitles(self.jellyfin_client, ep_id, srt_path)
+                            
                     def transcode_progress(progress: float):
                         self.after(0, lambda p=progress: self.task_progress.set(
                             0.3 + p * 0.7
@@ -1719,6 +1727,48 @@ class JellyDiscApp(_BaseClass):
             self.log_text.see("end")
         
         self.after(0, update)
+
+
+def download_episode_subtitles(client, episode_id, srt_save_path):
+    """
+    Check if the episode has external English/any subtitles on Jellyfin and download them.
+    Returns True if downloaded successfully.
+    """
+    try:
+        details = client.get_item_details(episode_id)
+        media_sources = details.get("MediaSources", [])
+        if not media_sources:
+            return False
+            
+        source = media_sources[0]
+        media_source_id = source.get("Id")
+        streams = source.get("MediaStreams", [])
+        
+        # Look for English subtitle streams first
+        sub_stream = None
+        for s in streams:
+            if s.get("Type") == "Subtitle" and s.get("Language") == "eng":
+                sub_stream = s
+                break
+                
+        # If no English, look for any subtitle stream
+        if not sub_stream:
+            for s in streams:
+                if s.get("Type") == "Subtitle":
+                    sub_stream = s
+                    break
+                    
+        if sub_stream and sub_stream.get("IsExternal", False):
+            stream_index = sub_stream.get("Index")
+            sub_url = f"{client.server_url}/Videos/{episode_id}/{media_source_id}/Subtitles/{stream_index}/0/Stream.srt"
+            response = client.session.get(sub_url, params={"api_key": client.access_token}, timeout=10)
+            response.raise_for_status()
+            srt_save_path.parent.mkdir(parents=True, exist_ok=True)
+            srt_save_path.write_text(response.text, encoding='utf-8')
+            return True
+    except Exception as e:
+        logger.warning(f"Failed to check/download external subtitles: {e}")
+    return False
 
 
 def run_cli(args):
@@ -2057,6 +2107,14 @@ def run_cli(args):
                 sys.stdout.flush()
             client.download_media_file(season.episodes[job.episode_index - 1].id, temp_input, progress_callback=prog_ep)
             print()
+            
+            if include_subs:
+                import re
+                match = re.search(r'/Items/([^/]+)/Download', job.input_path)
+                if match:
+                    ep_id = match.group(1)
+                    srt_path = temp_input.with_suffix('.srt')
+                    download_episode_subtitles(client, ep_id, srt_path)
             
             print(f"  Transcoding E{job.episode_index}...")
             transcoder.transcode(str(temp_input), job.output_path, video_bitrate=disc_bitrate, extract_subs=include_subs)
