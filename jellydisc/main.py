@@ -75,6 +75,48 @@ def sanitize_filename(name: str, max_length: int = 200) -> str:
     return safe[:max_length].strip()
 
 
+def ensure_default_trivia_audio(assets_dir: Path, log_callback=None) -> Optional[Path]:
+    """Ensure the default chill lofi loop track is downloaded for the trivia game."""
+    target_path = assets_dir / "trivia_bg.mp3"
+    if target_path.exists():
+        return target_path
+    
+    url = "https://upload.wikimedia.org/wikipedia/commons/6/69/Lo-fi_by_PetroVenus.mp3"
+    msg = "📥 Downloading default chill lofi background track for Trivia game..."
+    if log_callback:
+        log_callback(msg)
+    else:
+        print(msg)
+        
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            url, 
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        )
+        with urllib.request.urlopen(req, timeout=30) as response:
+            with open(target_path, 'wb') as out_file:
+                out_file.write(response.read())
+        msg_success = "✓ Default trivia background track downloaded successfully!"
+        if log_callback:
+            log_callback(msg_success)
+        else:
+            print(msg_success)
+    except Exception as e:
+        msg_fail = f"⚠️ Failed to download default trivia audio: {e}. Falling back to silence."
+        if log_callback:
+            log_callback(msg_fail)
+        else:
+            print(msg_fail)
+        if target_path.exists():
+            try:
+                target_path.unlink()
+            except Exception:
+                pass
+        return None
+    return target_path
+
+
 def get_chapters_string(dur_seconds: float, original_chapters: list[float] = None) -> str:
     """
     Format chapter points as a comma-separated string for dvdauthor.
@@ -1704,6 +1746,9 @@ class JellyDiscApp(_BaseClass):
                 self._update_task(f"Disc {disc_num}: Generating Trivia Menus...", 0.70)
                 self._log("Generating Trivia game menus...")
                 
+                # Download/Ensure default trivia audio loop
+                trivia_audio = ensure_default_trivia_audio(self.config.assets_dir, self._log)
+                
                 from jellydisc.menu_builder import generate_trivia_questions
                 rel_year = getattr(self.selected_series, "release_year", "")
                 eps_list = self.selected_season.episodes
@@ -1726,20 +1771,20 @@ class JellyDiscApp(_BaseClass):
                 )
                 
                 for q_idx, (q_bg, q_hl, q_sel, q_btns) in enumerate(t_questions):
-                    q_base_vid = menu_builder.generate_menu_video(q_bg, f"menu_trivia_q_base_{q_idx+1}.mpg", duration=2)
+                    q_base_vid = menu_builder.generate_menu_video(q_bg, f"menu_trivia_q_base_{q_idx+1}.mpg", audio_path=trivia_audio, duration=15 if trivia_audio else 2)
                     q_vid = menu_builder.compile_interactive_menu(
                         q_base_vid, q_hl, q_sel, q_btns, menu_builder.output_dir / f"menu_trivia_q_{q_idx+1}.mpg"
                     )
                     menu_trivia_vids.append(q_vid)
                     
                 w_bg, w_hl, w_sel, w_btns = t_wrong
-                w_base_vid = menu_builder.generate_menu_video(w_bg, "menu_trivia_wrong_base.mpg", duration=2)
+                w_base_vid = menu_builder.generate_menu_video(w_bg, "menu_trivia_wrong_base.mpg", audio_path=trivia_audio, duration=15 if trivia_audio else 2)
                 menu_trivia_wrong_vid = menu_builder.compile_interactive_menu(
                     w_base_vid, w_hl, w_sel, w_btns, menu_builder.output_dir / "menu_trivia_wrong.mpg"
                 )
                 
                 win_bg, win_hl, win_sel, win_btns = t_win
-                win_base_vid = menu_builder.generate_menu_video(win_bg, "menu_trivia_win_base.mpg", duration=2)
+                win_base_vid = menu_builder.generate_menu_video(win_bg, "menu_trivia_win_base.mpg", audio_path=trivia_audio, duration=15 if trivia_audio else 2)
                 menu_trivia_win_vid = menu_builder.compile_interactive_menu(
                     win_base_vid, win_hl, win_sel, win_btns, menu_builder.output_dir / "menu_trivia_win.mpg"
                 )
@@ -2624,6 +2669,10 @@ def run_cli(args):
         
         if include_trivia:
             print("  Generating Trivia game menus...")
+            
+            # Download/Ensure default trivia audio loop
+            trivia_audio = ensure_default_trivia_audio(assets_dir, None)
+            
             from jellydisc.menu_builder import generate_trivia_questions
             rel_year = getattr(series, "release_year", "")
             eps_list = season.episodes
@@ -2646,20 +2695,20 @@ def run_cli(args):
             )
             
             for q_idx, (q_bg, q_hl, q_sel, q_btns) in enumerate(t_questions):
-                q_base_vid = menu_builder.generate_menu_video(q_bg, f"menu_trivia_q_base_{q_idx+1}.mpg", duration=2)
+                q_base_vid = menu_builder.generate_menu_video(q_bg, f"menu_trivia_q_base_{q_idx+1}.mpg", audio_path=trivia_audio, duration=15 if trivia_audio else 2)
                 q_vid = menu_builder.compile_interactive_menu(
                     q_base_vid, q_hl, q_sel, q_btns, current_staging_dir / f"menu_trivia_q_{q_idx+1}.mpg"
                 )
                 menu_trivia_vids.append(q_vid)
                 
             w_bg, w_hl, w_sel, w_btns = t_wrong
-            w_base_vid = menu_builder.generate_menu_video(w_bg, "menu_trivia_wrong_base.mpg", duration=2)
+            w_base_vid = menu_builder.generate_menu_video(w_bg, "menu_trivia_wrong_base.mpg", audio_path=trivia_audio, duration=15 if trivia_audio else 2)
             menu_trivia_wrong_vid = menu_builder.compile_interactive_menu(
                 w_base_vid, w_hl, w_sel, w_btns, current_staging_dir / "menu_trivia_wrong.mpg"
             )
             
             win_bg, win_hl, win_sel, win_btns = t_win
-            win_base_vid = menu_builder.generate_menu_video(win_bg, "menu_trivia_win_base.mpg", duration=2)
+            win_base_vid = menu_builder.generate_menu_video(win_bg, "menu_trivia_win_base.mpg", audio_path=trivia_audio, duration=15 if trivia_audio else 2)
             menu_trivia_win_vid = menu_builder.compile_interactive_menu(
                 win_base_vid, win_hl, win_sel, win_btns, current_staging_dir / "menu_trivia_win.mpg"
             )
