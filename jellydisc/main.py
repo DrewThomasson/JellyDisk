@@ -1937,15 +1937,82 @@ def run_cli(args):
     if include_trailer:
         print("Checking for trailers...")
         try:
+            # 1. Try local trailers first
             trailers = client.get_local_trailers(series.id)
             if trailers:
                 trailer_item = trailers[0]
                 trailer_path = current_staging_dir / "trailer.mpg"
                 if not trailer_path.exists():
                     temp_trailer = current_staging_dir / "temp_trailer.tmp"
-                    client.download_media_file(trailer_item["Id"], temp_trailer)
+                    print("  Downloading local trailer...")
+                    def prog_t(dl, tot):
+                        percent = 100 * (dl / tot)
+                        filled = int(30 * dl // tot)
+                        bar = '█' * filled + '-' * (30 - filled)
+                        sys.stdout.write(f"\r    |{bar}| {percent:.1f}% ({dl / 1024 / 1024:.1f}/{tot / 1024 / 1024:.1f} MB)")
+                        sys.stdout.flush()
+                    client.download_media_file(trailer_item["Id"], temp_trailer, progress_callback=prog_t)
+                    print()
+                    print("  Transcoding local trailer...")
                     transcoder.transcode(str(temp_trailer), trailer_path, extract_subs=False)
                     temp_trailer.unlink()
+            else:
+                # 2. Try remote YouTube trailers via yt-dlp
+                print("  No local trailers found. Checking for remote YouTube trailers...")
+                import shutil
+                import subprocess
+                
+                item_details = client.get_item_details(series.id)
+                remote_trailers = item_details.get("RemoteTrailers", [])
+                youtube_url = None
+                if remote_trailers:
+                    for rt in remote_trailers:
+                        rt_url = rt.get("Url", "")
+                        if "youtube.com" in rt_url or "youtu.be" in rt_url:
+                            youtube_url = rt_url
+                            print(f"  Found remote YouTube trailer URL: {youtube_url}")
+                            break
+                            
+                if youtube_url:
+                    trailer_path = current_staging_dir / "trailer.mpg"
+                    if trailer_path.exists() and trailer_path.stat().st_size > 2 * 1024 * 1024:
+                        print("  ✓ Remote trailer already downloaded and transcoded. Skipping.")
+                    else:
+                        yt_dlp_path = shutil.which("yt-dlp") or "/opt/homebrew/bin/yt-dlp"
+                        if yt_dlp_path and Path(yt_dlp_path).exists():
+                            temp_trailer = current_staging_dir / "temp_trailer_input.mp4"
+                            try:
+                                print("  Downloading remote YouTube trailer using yt-dlp...")
+                                if temp_trailer.exists():
+                                    temp_trailer.unlink()
+                                    
+                                subprocess.run(
+                                    [
+                                        yt_dlp_path,
+                                        "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+                                        "--merge-output-format", "mp4",
+                                        "-o", str(temp_trailer),
+                                        youtube_url
+                                    ],
+                                    capture_output=True,
+                                    text=True,
+                                    check=True,
+                                    timeout=300
+                                )
+                                
+                                if temp_trailer.exists() and temp_trailer.stat().st_size > 0:
+                                    print("  Transcoding remote trailer...")
+                                    transcoder.transcode(str(temp_trailer), trailer_path, extract_subs=False)
+                                    temp_trailer.unlink()
+                                    print("  ✓ Remote trailer transcode complete.")
+                            except Exception as e:
+                                print(f"  Warning: yt-dlp download failed: {e}")
+                                if temp_trailer.exists():
+                                    temp_trailer.unlink()
+                                trailer_path = None
+                        else:
+                            print("  Warning: Remote trailer found but yt-dlp is not installed on this system.")
+                            trailer_path = None
         except Exception as e:
             print(f"Warning: Failed to download/transcode trailer: {e}")
             trailer_path = None
@@ -1982,7 +2049,14 @@ def run_cli(args):
                 
             temp_input = current_staging_dir / f"temp_input_{job.episode_index}.tmp"
             print(f"  Downloading E{job.episode_index}...")
-            client.download_media_file(season.episodes[job.episode_index - 1].id, temp_input)
+            def prog_ep(dl, tot):
+                percent = 100 * (dl / tot)
+                filled = int(30 * dl // tot)
+                bar = '█' * filled + '-' * (30 - filled)
+                sys.stdout.write(f"\r    |{bar}| {percent:.1f}% ({dl / 1024 / 1024:.1f}/{tot / 1024 / 1024:.1f} MB)")
+                sys.stdout.flush()
+            client.download_media_file(season.episodes[job.episode_index - 1].id, temp_input, progress_callback=prog_ep)
+            print()
             
             print(f"  Transcoding E{job.episode_index}...")
             transcoder.transcode(str(temp_input), job.output_path, video_bitrate=disc_bitrate, extract_subs=include_subs)
