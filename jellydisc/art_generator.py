@@ -749,3 +749,166 @@ class ArtGenerator:
         )
         logger.info(f"✓ Episode Folio PDF generated successfully at: {final_pdf_path}")
         return final_pdf_path
+
+    def generate_disc_label(self,
+                            series_name: str,
+                            season_name: str,
+                            disc_num: int,
+                            total_discs: int,
+                            episodes: list,
+                            backdrop_path: Optional[Path],
+                            logo_path: Optional[Path],
+                            output_path: Path) -> Path:
+        """
+        Generate a printable CD/DVD disc label face.
+        Saves as a high-quality PDF at 300 DPI, with transparency mask for the hole.
+        """
+        logger.info(f"Generating DVD Disc Face Label for {series_name} Disc {disc_num}...")
+        
+        # Dimensions for CD/DVD (120mm x 120mm at 300 DPI)
+        lbl_size = 1417
+        canvas = Image.new('RGBA', (lbl_size, lbl_size), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(canvas)
+        
+        # 1. Background image (aspect cover cropped to square)
+        bg_drawn = False
+        if backdrop_path and backdrop_path.exists():
+            try:
+                bd = Image.open(backdrop_path)
+                bd_cropped = self._resize_to_cover(bd, lbl_size, lbl_size)
+                # Blur background slightly for text readability
+                bd_blurred = bd_cropped.filter(ImageFilter.GaussianBlur(8))
+                canvas.paste(bd_blurred, (0, 0))
+                bg_drawn = True
+            except Exception as e:
+                logger.error(f"Failed to draw backdrop on disc label: {e}")
+                
+        if not bg_drawn:
+            # Fallback to dark solid circle
+            draw.ellipse([0, 0, lbl_size, lbl_size], fill=(20, 20, 30, 255))
+            
+        # Draw dark slate glass overlay on the disc face
+        glass = Image.new('RGBA', (lbl_size, lbl_size), (12, 12, 20, 160))
+        canvas.paste(glass, (0, 0), glass)
+        
+        # 2. Draw Series Logo or Title
+        logo_drawn = False
+        if logo_path and logo_path.exists():
+            try:
+                logo = Image.open(logo_path).convert('RGBA')
+                # Scale logo to fit top area of disc (max width 750, max height 220)
+                logo.thumbnail((750, 220), Image.Resampling.LANCZOS)
+                lw, lh = logo.size
+                lx = (lbl_size - lw) // 2
+                ly = 150
+                canvas.paste(logo, (lx, ly), logo)
+                logo_drawn = True
+            except Exception as e:
+                logger.error(f"Failed to paste logo on disc label: {e}")
+                
+        if not logo_drawn:
+            font_title = self._get_font(bold=True, size=52)
+            title_lines = self._wrap_text(series_name.upper(), font_title, lbl_size - 300, draw)
+            y_off = 170
+            for line in title_lines[:2]:
+                try:
+                    lw = draw.textlength(line, font=font_title)
+                except AttributeError:
+                    lw = draw.textsize(line, font=font_title)[0]
+                lx = (lbl_size - int(lw)) // 2
+                draw.text((lx + 3, y_off + 3), line, fill=(0, 0, 0, 200), font=font_title)
+                draw.text((lx, y_off), line, fill=(255, 255, 255, 255), font=font_title)
+                y_off += 65
+
+        # 3. Draw Season Name and Disc Indicator (Middle / Right of center hole)
+        font_meta = self._get_font(bold=True, size=28)
+        
+        disc_text = f"DISC {disc_num} OF {total_discs}" if total_discs > 1 else f"DISC {disc_num}"
+        disc_text = disc_text.upper()
+        season_str = season_name.upper()
+        
+        y_meta = 870
+        try:
+            sw = draw.textlength(season_str, font=font_meta)
+        except AttributeError:
+            sw = draw.textsize(season_str, font=font_meta)[0]
+        sx = (lbl_size - int(sw)) // 2
+        draw.text((sx, y_meta), season_str, fill=(255, 215, 0, 255), font=font_meta) # Gold
+        
+        y_disc = y_meta + 40
+        try:
+            dw = draw.textlength(disc_text, font=font_meta)
+        except AttributeError:
+            dw = draw.textsize(disc_text, font=font_meta)[0]
+        dx = (lbl_size - int(dw)) // 2
+        draw.text((dx, y_disc), disc_text, fill=(255, 255, 255, 255), font=font_meta)
+
+        # 4. List Episodes on this disc horizontally in a single line (y = 980)
+        if episodes:
+            font_ep = self._get_font(bold=False, size=18)
+            ep_titles = []
+            for ep in episodes:
+                idx = getattr(ep, "index_number", getattr(ep, "episode_index", 0))
+                name = getattr(ep, "name", getattr(ep, "episode_name", ""))
+                ep_titles.append(f"{idx:02d}. {name}")
+            
+            ep_line = "  |  ".join(ep_titles)
+            ep_line_wrapped = self._wrap_text(ep_line, font_ep, lbl_size - 240, draw)
+            
+            y_ep = y_disc + 60
+            for line in ep_line_wrapped[:3]:
+                try:
+                    ew = draw.textlength(line, font=font_ep)
+                except AttributeError:
+                    ew = draw.textsize(line, font=font_ep)[0]
+                ex = (lbl_size - int(ew)) // 2
+                draw.text((ex, y_ep), line, fill=(200, 200, 205, 255), font=font_ep)
+                y_ep += 25
+
+        # 5. Technical Logos and Legal Disclaimer along bottom rim
+        font_badge = self._get_font(bold=True, size=20)
+        badge_text = "DVD VIDEO  |  DOLBY DIGITAL"
+        try:
+            bw = draw.textlength(badge_text, font=font_badge)
+        except AttributeError:
+            bw = draw.textsize(badge_text, font=font_badge)[0]
+        bx = (lbl_size - int(bw)) // 2
+        draw.text((bx, 1180), badge_text, fill=(160, 160, 160, 255), font=font_badge)
+
+        font_legal = self._get_font(bold=False, size=14)
+        legal_text = "© JELLYDISC DVD VIDEO. ALL RIGHTS RESERVED. FOR PRIVATE HOME USE ONLY. UNAUTHORIZED COPYING PROHIBITED."
+        try:
+            lw = draw.textlength(legal_text, font=font_legal)
+        except AttributeError:
+            lw = draw.textsize(legal_text, font=font_legal)[0]
+        lx = (lbl_size - int(lw)) // 2
+        draw.text((lx, 1220), legal_text, fill=(120, 120, 120, 255), font=font_legal)
+
+        # 6. Apply circular disc and inner hole mask to make corners and center transparent
+        mask = Image.new('L', (lbl_size, lbl_size), 0)
+        mask_draw = ImageDraw.Draw(mask)
+        mask_draw.ellipse([0, 0, lbl_size, lbl_size], fill=255)
+        mask_draw.ellipse([578, 578, 838, 838], fill=0)
+        
+        canvas_alpha = canvas.split()[3]
+        final_alpha = Image.new('L', (lbl_size, lbl_size), 0)
+        final_alpha.paste(mask, (0, 0), mask)
+        canvas.putalpha(final_alpha)
+        
+        guide_canvas = Image.new('RGBA', (lbl_size, lbl_size), (0, 0, 0, 0))
+        guide_draw = ImageDraw.Draw(guide_canvas)
+        guide_draw.ellipse([0, 0, lbl_size - 1, lbl_size - 1], outline=(255, 255, 255, 40), width=2)
+        guide_draw.ellipse([578, 578, 838, 838], outline=(255, 255, 255, 40), width=1)
+        canvas = Image.alpha_composite(canvas, guide_canvas)
+
+        white_bg = Image.new('RGB', (lbl_size, lbl_size), (255, 255, 255))
+        w_draw = ImageDraw.Draw(white_bg)
+        w_draw.ellipse([0, 0, lbl_size - 1, lbl_size - 1], outline=(200, 200, 200), width=1)
+        w_draw.ellipse([578, 578, 838, 838], outline=(200, 200, 200), width=1)
+        
+        white_bg.paste(canvas, (0, 0), canvas)
+        
+        final_pdf_path = output_path
+        white_bg.save(final_pdf_path, 'PDF', resolution=300.0)
+        logger.info(f"✓ DVD Disc Label PDF generated successfully at: {final_pdf_path}")
+        return final_pdf_path

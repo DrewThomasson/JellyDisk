@@ -408,6 +408,15 @@ class JellyDiscApp(_BaseClass):
             variable=self.folio_var
         )
         folio_check.grid(row=7, column=1, sticky="w", padx=10, pady=10)
+
+        # Generate Printable Disc Label
+        self.disc_label_var = ctk.BooleanVar(value=True)
+        disc_label_check = ctk.CTkCheckBox(
+            settings_frame,
+            text="Generate Printable Disc Face Labels (PDF)",
+            variable=self.disc_label_var
+        )
+        disc_label_check.grid(row=8, column=1, sticky="w", padx=10, pady=10)
         
         # Summary frame
         self.config_summary = ctk.CTkFrame(frame)
@@ -1571,8 +1580,9 @@ class JellyDiscApp(_BaseClass):
         # Generate printable cover art and/or booklet guide if selected
         generate_cover = self.cover_art_var.get()
         generate_folio = self.folio_var.get()
+        generate_labels = self.disc_label_var.get()
         
-        if (generate_cover or generate_folio) and self.selected_series and self.selected_season:
+        if (generate_cover or generate_folio or generate_labels) and self.selected_series and self.selected_season:
             self._update_task("Generating printable artwork PDFs...", 0.9)
             self._log("\n=== Generating Printable Artwork ===")
             try:
@@ -1610,6 +1620,41 @@ class JellyDiscApp(_BaseClass):
                         actors=getattr(self.selected_series, "actors", [])
                     )
                     self._log(f"✓ Episode Guide Booklet PDF saved to: {folio_pdf_path}")
+                    
+                if generate_labels:
+                    self._log("Generating CD/DVD Disc Face Label PDFs...")
+                    total_discs = len(self.disc_plans) if hasattr(self, 'disc_plans') and self.disc_plans else 1
+                    disc_plans_list = self.disc_plans if hasattr(self, 'disc_plans') and self.disc_plans else []
+                    
+                    if disc_plans_list:
+                        for disc_plan in disc_plans_list:
+                            disc_num = disc_plan.disc_number
+                            label_pdf_path = self.config.output_dir / f"{base_name}_Disc_{disc_num}_Label.pdf"
+                            art_gen.generate_disc_label(
+                                series_name=self.selected_series.name,
+                                season_name=self.selected_season.name,
+                                disc_num=disc_num,
+                                total_discs=total_discs,
+                                episodes=disc_plan.episodes,
+                                backdrop_path=backdrop_path,
+                                logo_path=logo_path,
+                                output_path=label_pdf_path
+                            )
+                            self._log(f"✓ Disc {disc_num} Label PDF saved to: {label_pdf_path}")
+                    else:
+                        # Fallback if no disc plans are active (e.g. single disc of all episodes)
+                        label_pdf_path = self.config.output_dir / f"{base_name}_Disc_1_Label.pdf"
+                        art_gen.generate_disc_label(
+                            series_name=self.selected_series.name,
+                            season_name=self.selected_season.name,
+                            disc_num=1,
+                            total_discs=1,
+                            episodes=self.selected_season.episodes,
+                            backdrop_path=backdrop_path,
+                            logo_path=logo_path,
+                            output_path=label_pdf_path
+                        )
+                        self._log(f"✓ Disc 1 Label PDF saved to: {label_pdf_path}")
                     
             except Exception as e:
                 self._log(f"⚠️ Printable artwork generation failed: {e}")
