@@ -2104,6 +2104,17 @@ def run_cli(args):
                 print("❌ No optical drives detected for burning.")
                 sys.exit(1)
                 
+        # Prompt for first disc insertion
+        print(f"\n==========================================")
+        print(f"  Please insert a blank/rewritable DVD into drive {drive}")
+        print(f"==========================================")
+        print("Press Enter once the disc is loaded to begin...")
+        try:
+            input()
+        except (KeyboardInterrupt, EOFError):
+            print("❌ Burning cancelled.")
+            sys.exit(1)
+            
         if args.erase:
             print(f"Erasing rewritable media in drive {drive}...")
             burner.erase_media(device=drive)
