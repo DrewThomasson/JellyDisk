@@ -624,6 +624,12 @@ class Burner:
         """Burn ISO using growisofs on Linux."""
         device = device or "/dev/sr0"
         
+        # Unmount the disk first to avoid device busy or locked errors
+        try:
+            subprocess.run(["umount", device], capture_output=True, text=True, timeout=10)
+        except Exception:
+            pass
+        
         cmd = [
             self._burner_path,
             "-dvd-compat",
@@ -913,6 +919,13 @@ class Burner:
             if self.platform == BurnerPlatform.LINUX:
                 # Linux: use dvd+rw-format or wodim
                 device = device or "/dev/sr0"
+                
+                # Unmount the disk first to avoid device busy or locked errors
+                try:
+                    subprocess.run(["umount", device], capture_output=True, text=True, timeout=10)
+                except Exception:
+                    pass
+                    
                 # Check for dvd+rw-format first (part of dvd+rw-tools)
                 format_tool = shutil.which("dvd+rw-format")
                 if format_tool:
