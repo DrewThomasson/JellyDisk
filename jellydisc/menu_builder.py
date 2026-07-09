@@ -1344,12 +1344,12 @@ def generate_trivia_questions(
     writers: Optional[list[str]] = None
 ) -> list[dict]:
     """
-    Generate trivia questions dynamically from local Jellyfin metadata fields (up to 5 questions).
+    Generate trivia questions dynamically from local Jellyfin metadata fields (up to 20 questions).
     """
     questions = []
     import random
     
-    # 1. Cast Questions (generate up to 2 distinct questions)
+    # 1. Cast Questions (generate up to 8 distinct questions)
     valid_actors = []
     if actors:
         for actor in actors:
@@ -1357,7 +1357,7 @@ def generate_trivia_questions(
                 valid_actors.append(actor)
                 
     if valid_actors:
-        chosen_actors = random.sample(valid_actors, min(2, len(valid_actors)))
+        chosen_actors = random.sample(valid_actors, min(8, len(valid_actors)))
         for chosen in chosen_actors:
             name, role = chosen.split(" as ", 1)
             role = role.strip()
@@ -1406,67 +1406,70 @@ def generate_trivia_questions(
             "correct_index": correct_idx
         })
         
-    # 3. Director Question (especially for movies)
+    # 3. Director Questions (especially for movies)
     if directors:
-        dir_name = directors[0]
-        other_dirs = ["Steven Spielberg", "Christopher Nolan", "Quentin Tarantino", "Martin Scorsese", "James Cameron"]
-        distractors = [d for d in other_dirs if d != dir_name]
-        distractors = random.sample(distractors, 3)
-        options = distractors + [dir_name]
-        random.shuffle(options)
-        correct_idx = options.index(dir_name)
+        for idx, dir_name in enumerate(directors[:2]):  # up to 2 directors
+            other_dirs = ["Steven Spielberg", "Christopher Nolan", "Quentin Tarantino", "Martin Scorsese", "James Cameron"]
+            distractors = [d for d in other_dirs if d != dir_name]
+            distractors = random.sample(distractors, 3)
+            options = distractors + [dir_name]
+            random.shuffle(options)
+            correct_idx = options.index(dir_name)
+            
+            questions.append({
+                "question": f"Who directed the movie {series_name}?" if idx == 0 else f"Who is listed as a co-director for {series_name}?",
+                "options": options,
+                "correct_index": correct_idx
+            })
         
-        questions.append({
-            "question": f"Who directed the movie {series_name}?",
-            "options": options,
-            "correct_index": correct_idx
-        })
-        
-    # 4. Writer/Creator Question
+    # 4. Writer/Creator Questions
     if writers:
-        writer_name = writers[0]
-        other_writers = ["George Lucas", "Stephen King", "Harold Ramis", "John Carpenter", "Nick Castle"]
-        distractors = [w for w in other_writers if w != writer_name]
-        distractors = random.sample(distractors, 3)
-        options = distractors + [writer_name]
-        random.shuffle(options)
-        correct_idx = options.index(writer_name)
+        for idx, writer_name in enumerate(writers[:2]):  # up to 2 writers
+            other_writers = ["George Lucas", "Stephen King", "Harold Ramis", "John Carpenter", "Nick Castle"]
+            distractors = [w for w in other_writers if w != writer_name]
+            distractors = random.sample(distractors, 3)
+            options = distractors + [writer_name]
+            random.shuffle(options)
+            correct_idx = options.index(writer_name)
+            
+            questions.append({
+                "question": f"Who is listed as a writer for {series_name}?" if idx == 0 else f"Who co-wrote the screenplay/teleplay for {series_name}?",
+                "options": options,
+                "correct_index": correct_idx
+            })
         
-        questions.append({
-            "question": f"Who is listed as a writer for {series_name}?",
-            "options": options,
-            "correct_index": correct_idx
-        })
-        
-    # 5. Episode Question (especially for TV shows)
+    # 5. Episode Questions (especially for TV shows - up to 4 distinct episodes)
     if episodes and len(episodes) > 1:
-        real_ep = random.choice(episodes)
-        real_name = getattr(real_ep, "name", getattr(real_ep, "episode_name", ""))
+        chosen_eps = random.sample(episodes, min(4, len(episodes)))
+        for ep in chosen_eps:
+            real_name = getattr(ep, "name", getattr(ep, "episode_name", ""))
+            
+            fake_names = [
+                "The Lost Episode",
+                "A Very Special Occasion",
+                "Pineapple Express Incident",
+                "The Unexpected Journey",
+                "Escape from Reality",
+                "A Bad Day at the Office",
+                "The Midnight Run",
+                "Return of the Legend",
+                "The Final Chapter",
+                "A New Beginning"
+            ]
+            distractors = [f for f in fake_names if f.lower() != real_name.lower()]
+            distractors = random.sample(distractors, 3)
+            
+            options = distractors + [real_name]
+            random.shuffle(options)
+            correct_idx = options.index(real_name)
+            
+            questions.append({
+                "question": f"Which of the following is a real episode from this season?",
+                "options": options,
+                "correct_index": correct_idx
+            })
         
-        fake_names = [
-            "The Lost Episode",
-            "A Very Special Occasion",
-            "Pineapple Express Incident",
-            "The Unexpected Journey",
-            "Escape from Reality",
-            "A Bad Day at the Office",
-            "The Midnight Run",
-            "Return of the Legend"
-        ]
-        distractors = [f for f in fake_names if f.lower() != real_name.lower()]
-        distractors = random.sample(distractors, 3)
-        
-        options = distractors + [real_name]
-        random.shuffle(options)
-        correct_idx = options.index(real_name)
-        
-        questions.append({
-            "question": f"Which of the following is a real episode from this season?",
-            "options": options,
-            "correct_index": correct_idx
-        })
-        
-    # 6. Fallback General DVD/Movie Questions (to fill up to 5 questions if needed)
+    # 6. Fallback General DVD/Movie Questions (to fill up to 20 questions if needed)
     fallback_q = [
         {
             "question": "What is the standard aspect ratio of a standard definition DVD?",
@@ -1482,15 +1485,60 @@ def generate_trivia_questions(
             "question": "Which optical disc format succeeded the DVD in 2006?",
             "options": ["HD-DVD", "Blu-ray Disc", "LaserDisc", "VCD"],
             "correct_index": 1
+        },
+        {
+            "question": "What does 'CSS' stand for in DVD encryption?",
+            "options": ["Content Scramble System", "Copy Security System", "Cascading Style Sheets", "Core Sector Scrambler"],
+            "correct_index": 0
+        },
+        {
+            "question": "Which DVD region code covers the United States and Canada?",
+            "options": ["Region 1", "Region 2", "Region 4", "Region 0 (All)"],
+            "correct_index": 0
+        },
+        {
+            "question": "What is the physical storage capacity of a single-layer DVD-5?",
+            "options": ["4.7 GB", "8.5 GB", "700 MB", "25 GB"],
+            "correct_index": 0
+        },
+        {
+            "question": "What is the physical storage capacity of a dual-layer DVD-9?",
+            "options": ["4.7 GB", "8.5 GB", "9.4 GB", "15 GB"],
+            "correct_index": 1
+        },
+        {
+            "question": "Which file system is standard on DVD-Video discs?",
+            "options": ["FAT32", "NTFS", "UDF (Universal Disk Format)", "ISO 9660"],
+            "correct_index": 2
+        },
+        {
+            "question": "What format is standard DVD-Video compressed in?",
+            "options": ["MPEG-1", "MPEG-2", "H.264 / MPEG-4", "AV1"],
+            "correct_index": 1
+        },
+        {
+            "question": "Which analog copy protection system was built into most DVD players?",
+            "options": ["Macrovision", "FairPlay", "Widevine", "HDCP"],
+            "correct_index": 0
+        },
+        {
+            "question": "What is the term for fitting a 16:9 video onto a 4:3 DVD screen using black bars?",
+            "options": ["Anamorphic", "Letterboxing", "Pan and Scan", "Pillarboxing"],
+            "correct_index": 1
+        },
+        {
+            "question": "In what year were the first commercial DVD players and discs released in the US?",
+            "options": ["1995", "1997", "1999", "2001"],
+            "correct_index": 1
         }
     ]
     
     for f_q in fallback_q:
-        if len(questions) >= 5:
+        if len(questions) >= 20:
             break
         # Avoid duplicate questions
         if f_q["question"] not in [q["question"] for q in questions]:
             questions.append(f_q)
             
-    return questions[:5]
+    return questions[:20]
 
