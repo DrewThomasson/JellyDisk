@@ -64,16 +64,17 @@ pip install -r requirements.txt
 
 **Ubuntu/Debian:**
 ```bash
-sudo apt install ffmpeg dvdauthor dvd+rw-tools wodim
+sudo apt install ffmpeg dvdauthor dvd+rw-tools wodim yt-dlp
 ```
 
 **macOS (Homebrew):**
 ```bash
-brew install ffmpeg dvdauthor
+brew install ffmpeg dvdauthor yt-dlp
 ```
 
 **Windows:**
-Download ffmpeg from https://ffmpeg.org/download.html and dvdauthor from available Windows ports.
+Download ffmpeg from https://ffmpeg.org/download.html, dvdauthor from available Windows ports, and yt-dlp from https://github.com/yt-dlp/yt-dlp.
+*(Note: `yt-dlp` is optional, and is only needed if you want to download remote YouTube trailers for your menus).*
 
 ## Usage
 
