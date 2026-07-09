@@ -4,6 +4,7 @@ Art Generator Module
 This module generates printable DVD box cover art (front, spine, and back)
 and an episode folio/booklet PDF with details for each episode.
 Uses Pillow to layout high-resolution (300 DPI) templates.
+Features dynamic palette extraction to theme designs matching series artwork.
 """
 
 import logging
@@ -170,6 +171,85 @@ class ArtGenerator:
             start_y = (new_h - target_h) // 2
             return img_resized.crop((0, start_y, target_w, start_y + target_h))
 
+    def _extract_theme_colors(self, poster_path: Optional[Path], backdrop_path: Optional[Path]) -> tuple:
+        """
+        Extract dominant background and vibrant accent colors from poster or backdrop.
+        Returns (bg_color_rgb, accent_color_rgb)
+        """
+        default_bg = (15, 15, 25)
+        default_accent = (255, 215, 0) # Gold
+        
+        img_path = poster_path if (poster_path and poster_path.exists()) else backdrop_path
+        if not img_path or not img_path.exists():
+            return default_bg, default_accent
+            
+        try:
+            img = Image.open(img_path).convert('RGB')
+            # Resize image down to speed up quantization
+            img_temp = img.copy()
+            img_temp.thumbnail((100, 100))
+            
+            # Quantize image down to 6 dominant colors using PIL octree quantization
+            quantized = img_temp.quantize(colors=6, method=Image.MAXCOVERAGE)
+            color_counts = quantized.getcolors()
+            if not color_counts:
+                return default_bg, default_accent
+                
+            # Sort colors by dominance (pixel count)
+            color_counts.sort(reverse=True, key=lambda x: x[0])
+            palette = quantized.getpalette()
+            
+            colors = []
+            for count, index in color_counts:
+                r = palette[index*3]
+                g = palette[index*3+1]
+                b = palette[index*3+2]
+                colors.append((r, g, b))
+                
+            primary = colors[0]
+            
+            # 1. Dark background color (darken primary color to 15% brightness)
+            # Keeping colors within readable dark ranges (10 to 45 RGB values)
+            r_bg = max(12, min(36, int(primary[0] * 0.15)))
+            g_bg = max(12, min(36, int(primary[1] * 0.15)))
+            b_bg = max(18, min(48, int(primary[2] * 0.15)))
+            bg_color = (r_bg, g_bg, b_bg)
+            
+            # 2. Find a vibrant accent color from the palette
+            best_accent = default_accent
+            max_score = -1
+            for c in colors:
+                # Saturation (difference between max and min channel)
+                sat = max(c) - min(c)
+                # Brightness (average)
+                val = sum(c) / 3
+                # Contrast distance from background
+                dist = ((c[0] - bg_color[0])**2 + (c[1] - bg_color[1])**2 + (c[2] - bg_color[2])**2)**0.5
+                
+                # Check for distinct and visible colors
+                if val > 90 and dist > 70:
+                    # Score favors highly saturated (colorful) and contrasting colors
+                    score = sat * 1.6 + val * 0.4 + dist * 0.3
+                    if score > max_score:
+                        max_score = score
+                        best_accent = c
+                        
+            # If the best accent is still too dark to read on dark backgrounds, boost it
+            acc_val = sum(best_accent) / 3
+            if acc_val < 130:
+                factor = 160 / max(1, acc_val)
+                best_accent = (
+                    min(255, int(best_accent[0] * factor)),
+                    min(255, int(best_accent[1] * factor)),
+                    min(255, int(best_accent[2] * factor))
+                )
+                
+            return bg_color, best_accent
+            
+        except Exception as e:
+            logger.error(f"Error extracting theme colors: {e}")
+            return default_bg, default_accent
+
     def generate_dvd_wrap(self, 
                           series_name: str,
                           season_name: str,
@@ -185,8 +265,13 @@ class ArtGenerator:
         """
         logger.info(f"Generating DVD Cover Wrap for {series_name}...")
         
-        # Base canvas (RGBA for transparency support)
-        canvas = Image.new('RGBA', (COV_WIDTH, COV_HEIGHT), (15, 15, 25, 255))
+        # Extract dynamic color theme matching the artwork
+        bg_rgb, accent_rgb = self._extract_theme_colors(season_poster_path, backdrop_path)
+        bg_color = (bg_rgb[0], bg_rgb[1], bg_rgb[2], 255)
+        accent_color = (accent_rgb[0], accent_rgb[1], accent_rgb[2], 255)
+        
+        # Base canvas
+        canvas = Image.new('RGBA', (COV_WIDTH, COV_HEIGHT), bg_color)
         draw = ImageDraw.Draw(canvas)
         
         # 1. FRONT COVER (Right Side: x = 1695 to 3224)
@@ -253,9 +338,9 @@ class ArtGenerator:
         band = Image.new('RGBA', (COV_PAGE, band_h), (0, 0, 0, 160))
         canvas.paste(band, (front_x, sy - 30), band)
         
-        # Draw season text
+        # Draw season text using our accent color
         draw.text((sx + 3, sy + 3), season_str, fill=(0, 0, 0, 220), font=font_season)
-        draw.text((sx, sy), season_str, fill=(255, 215, 0, 255), font=font_season)  # Gold
+        draw.text((sx, sy), season_str, fill=accent_color, font=font_season)
 
         # Small "DVD VIDEO" format badge at bottom
         font_badge = self._get_font(bold=True, size=24)
@@ -265,22 +350,19 @@ class ArtGenerator:
         except AttributeError:
             bw = draw.textsize(badge_text, font=font_badge)[0]
         bx = front_x + (COV_PAGE - int(bw)) // 2
-        draw.text((bx, 2000), badge_text, fill=(200, 200, 200, 255), font=font_badge)
+        draw.text((bx, 2000), badge_text, fill=(220, 220, 225, 255), font=font_badge)
 
 
         # 2. SPINE (Middle: x = 1529 to 1695)
-        # Background: Grab vertical strip from backdrop (or use solid dark slate)
-        spine_color = (25, 25, 38, 255)
+        # Background: Grab vertical strip from backdrop (or use solid theme background)
         if backdrop_path and backdrop_path.exists():
             try:
                 bd = Image.open(backdrop_path)
                 bd_w, bd_h = bd.size
-                # Crop a slice from center-left of backdrop
                 slice_w = int(bd_h * (COV_SPINE / COV_HEIGHT))
                 slice_x = max(0, (bd_w - slice_w) // 2)
                 bd_slice = bd.crop((slice_x, 0, slice_x + slice_w, bd_h))
                 bd_slice_resized = bd_slice.resize((COV_SPINE, COV_HEIGHT), Image.Resampling.LANCZOS)
-                # Blur and darken
                 bd_slice_blurred = bd_slice_resized.filter(ImageFilter.GaussianBlur(15))
                 canvas.paste(bd_slice_blurred, (COV_PAGE, 0))
                 # Semi-transparent overlay to darken
@@ -288,16 +370,14 @@ class ArtGenerator:
                 canvas.paste(overlay, (COV_PAGE, 0), overlay)
             except Exception as e:
                 logger.error(f"Failed to generate textured spine background: {e}")
-                draw.rectangle([(COV_PAGE, 0), (COV_PAGE + COV_SPINE, COV_HEIGHT)], fill=spine_color)
+                draw.rectangle([(COV_PAGE, 0), (COV_PAGE + COV_SPINE, COV_HEIGHT)], fill=bg_color)
         else:
-            draw.rectangle([(COV_PAGE, 0), (COV_PAGE + COV_SPINE, COV_HEIGHT)], fill=spine_color)
+            draw.rectangle([(COV_PAGE, 0), (COV_PAGE + COV_SPINE, COV_HEIGHT)], fill=bg_color)
 
         # Draw rotated Spine Text (Series Name - Season Name)
-        # Create separate image, draw text, rotate 270 deg (top-to-bottom)
         spine_font = self._get_font(bold=True, size=48)
         spine_text_str = f"{series_name.upper()}  —  {season_name.upper()}"
         
-        # Temp image (width is length of spine text, height is spine thickness)
         text_img = Image.new('RGBA', (1600, COV_SPINE), (0, 0, 0, 0))
         text_draw = ImageDraw.Draw(text_img)
         try:
@@ -305,14 +385,11 @@ class ArtGenerator:
         except AttributeError:
             tw = text_draw.textsize(spine_text_str, font=spine_font)[0]
             
-        # Draw centered
         tx = (1600 - int(tw)) // 2
         ty = (COV_SPINE - 60) // 2
         text_draw.text((tx, ty), spine_text_str, fill=(255, 255, 255, 240), font=spine_font)
         
-        # Rotate 270 degrees
         rotated_text = text_img.rotate(270, expand=True)
-        # Paste centered vertically on spine (y starts at (2161 - 1600)//2 = 280)
         canvas.paste(rotated_text, (COV_PAGE, 280), rotated_text)
 
         # Draw DVD format logo rotated at the bottom of spine
@@ -329,7 +406,7 @@ class ArtGenerator:
 
 
         # 3. BACK COVER (Left Side: x = 0 to 1529)
-        # Background: Heavy blurred backdrop with dark overlay
+        # Background: Heavy blurred backdrop with dark color-matched glass overlay
         if backdrop_path and backdrop_path.exists():
             try:
                 bd = Image.open(backdrop_path)
@@ -339,11 +416,10 @@ class ArtGenerator:
             except Exception as e:
                 logger.error(f"Failed to draw back cover blurred bg: {e}")
         
-        # Darkening glass layer on back cover
-        glass_overlay = Image.new('RGBA', (COV_PAGE, COV_HEIGHT), (12, 12, 20, 210))
+        # Darkening glass layer (tinted to matching background color)
+        glass_overlay = Image.new('RGBA', (COV_PAGE, COV_HEIGHT), (bg_rgb[0], bg_rgb[1], bg_rgb[2], 215))
         canvas.paste(glass_overlay, (0, 0), glass_overlay)
         
-        # Safe margins for back cover
         margin = 100
         text_w = COV_PAGE - (2 * margin)
         
@@ -354,18 +430,17 @@ class ArtGenerator:
         
         y_offset += 65
         font_back_season = self._get_font(bold=True, size=36)
-        draw.text((margin, y_offset), season_name, fill=(255, 215, 0, 255), font=font_back_season)
+        draw.text((margin, y_offset), season_name, fill=accent_color, font=font_back_season)
         
-        # Draw thin separator line
+        # Draw thin separator line (using tinted accent color)
         y_offset += 60
-        draw.line([(margin, y_offset), (COV_PAGE - margin, y_offset)], fill=(255, 255, 255, 40), width=3)
+        draw.line([(margin, y_offset), (COV_PAGE - margin, y_offset)], fill=(accent_rgb[0], accent_rgb[1], accent_rgb[2], 50), width=3)
         
         # Draw Season Overview / Synopsis
         y_offset += 40
         font_overview = self._get_font(bold=False, size=24)
         overview_wrapped = self._wrap_text(overview, font_overview, text_w, draw)
         
-        # Show up to 8 lines of overview
         for line in overview_wrapped[:8]:
             draw.text((margin, y_offset), line, fill=(230, 230, 240, 255), font=font_overview)
             y_offset += 32
@@ -374,7 +449,7 @@ class ArtGenerator:
             draw.text((margin, y_offset), "...", fill=(230, 230, 240, 255), font=font_overview)
             y_offset += 32
             
-        # Draw "EPISODE SELECTION" header
+        # Draw "EPISODES" header
         y_offset += 50
         font_ep_header = self._get_font(bold=True, size=28)
         draw.text((margin, y_offset), "EPISODES", fill=(255, 255, 255, 255), font=font_ep_header)
@@ -382,28 +457,28 @@ class ArtGenerator:
         y_offset += 45
         font_ep_item = self._get_font(bold=False, size=22)
         
-        # Layout episodes in columns
         max_per_col = 8
         col_w = text_w // 2
         
-        for idx, ep in enumerate(episodes[:16]):  # Display up to 16 episodes on cover
+        for idx, ep in enumerate(episodes[:16]):
             col = idx // max_per_col
             row = idx % max_per_col
             
             ex = margin + (col * col_w)
             ey = y_offset + (row * 36)
             
-            runtime = f" ({int(ep.runtime_minutes)}m)" if getattr(ep, "runtime_minutes", 0) > 0 else ""
-            ep_text = f"{ep.index_number:02d}. {ep.name}{runtime}"
+            ep_idx = getattr(ep, "index_number", getattr(ep, "episode_index", idx + 1))
+            ep_name = getattr(ep, "name", getattr(ep, "episode_name", ""))
             
-            # Truncate episode text if too long
+            runtime = f" ({int(ep.runtime_minutes)}m)" if getattr(ep, "runtime_minutes", 0) > 0 else ""
+            ep_text = f"{ep_idx:02d}. {ep_name}{runtime}"
+            
             try:
                 ep_len = draw.textlength(ep_text, font=font_ep_item)
             except AttributeError:
                 ep_len = draw.textsize(ep_text, font=font_ep_item)[0]
                 
             if ep_len > col_w - 40:
-                # Simple truncation
                 while ep_len > col_w - 60 and len(ep_text) > 5:
                     ep_text = ep_text[:-2]
                     try:
@@ -412,17 +487,17 @@ class ArtGenerator:
                         ep_len = draw.textsize(ep_text + "...", font=font_ep_item)[0]
                 ep_text += "..."
                 
-            draw.text((ex, ey), ep_text, fill=(200, 200, 205, 255), font=font_ep_item)
+            draw.text((ex, ey), ep_text, fill=(215, 215, 220, 255), font=font_ep_item)
             
-        # Draw 3 Episode Thumbnails in a nice strip (above tech specs)
+        # Draw 3 Episode Thumbnails in a nice strip
         thumb_y = 1590
         thumb_w = 360
         thumb_h = 203  # 16:9 ratio
         
-        # Gather thumb paths from assets if available
         thumbs_found = []
         for ep in episodes:
-            t_path = self.assets_dir / f"ep_{ep.index_number}_thumb.jpg"
+            ep_idx = getattr(ep, "index_number", getattr(ep, "episode_index", 1))
+            t_path = self.assets_dir / f"ep_{ep_idx}_thumb.jpg"
             if t_path.exists():
                 thumbs_found.append(t_path)
             if len(thumbs_found) >= 3:
@@ -436,15 +511,18 @@ class ArtGenerator:
                     t_img = Image.open(t_path)
                     t_resized = self._resize_to_cover(t_img, thumb_w, thumb_h)
                     
-                    # Draw a nice frame border
-                    draw.rectangle([(tx - 4, thumb_y - 4), (tx + thumb_w + 4, thumb_y + thumb_h + 4)], outline=(255, 255, 255, 80), width=4)
+                    # Border using tinted accent color
+                    draw.rectangle([(tx - 4, thumb_y - 4), (tx + thumb_w + 4, thumb_y + thumb_h + 4)], 
+                                   outline=(accent_rgb[0], accent_rgb[1], accent_rgb[2], 90), width=4)
                     canvas.paste(t_resized, (tx, thumb_y))
                 except Exception as e:
                     logger.error(f"Failed to place back cover thumbnail {t_idx}: {e}")
 
         # Technical Specs Bar at bottom
         specs_y = 1910
-        draw.rectangle([(margin, specs_y), (COV_PAGE - margin, specs_y + 100)], fill=(0, 0, 0, 100), outline=(255, 255, 255, 30), width=2)
+        draw.rectangle([(margin, specs_y), (COV_PAGE - margin, specs_y + 100)], 
+                       fill=(0, 0, 0, 100), 
+                       outline=(accent_rgb[0], accent_rgb[1], accent_rgb[2], 50), width=2)
         
         specs_text = "NTSC  |  MPEG-2  |  COLOR  |  DOLBY DIGITAL STEREO  |  16:9 ANAMORPHIC  |  REGION 0  |  DVD-9"
         font_specs = self._get_font(bold=True, size=20)
@@ -457,12 +535,8 @@ class ArtGenerator:
         sp_y = specs_y + 36
         draw.text((sp_x, sp_y), specs_text, fill=(150, 150, 160, 255), font=font_specs)
         
-        # Save as single-page PDF
-        # PDF format requires converting to RGB first
         final_pdf_path = output_path
         rgb_canvas = canvas.convert('RGB')
-        
-        # Save with DPI metadata for accurate physical printing
         rgb_canvas.save(final_pdf_path, 'PDF', resolution=300.0)
         logger.info(f"✓ DVD Cover Wrap PDF generated successfully at: {final_pdf_path}")
         return final_pdf_path
@@ -481,28 +555,30 @@ class ArtGenerator:
         Saves as a multi-page PDF at 300 DPI.
         """
         logger.info(f"Generating Episode Folio booklet for {series_name}...")
+        
+        # Extract dynamic color theme (pass logo path and backdrop)
+        bg_color, accent_color = self._extract_theme_colors(logo_path, backdrop_path)
+        
         pages = []
         
         # --- PAGE 1: COVER PAGE ---
-        cov_img = Image.new('RGB', (BK_WIDTH, BK_HEIGHT), (15, 15, 25))
+        cov_img = Image.new('RGB', (BK_WIDTH, BK_HEIGHT), bg_color)
         c_draw = ImageDraw.Draw(cov_img)
         
         if backdrop_path and backdrop_path.exists():
             try:
                 bd = Image.open(backdrop_path)
                 bd_resized = self._resize_to_cover(bd, BK_WIDTH, BK_HEIGHT)
-                # Apply blur
                 bd_blur = bd_resized.filter(ImageFilter.GaussianBlur(15))
                 cov_img.paste(bd_blur, (0, 0))
             except Exception as e:
                 logger.error(f"Failed to load cover backdrop: {e}")
                 
         # Draw transparent dark sheet on cover page
-        sheet = Image.new('RGBA', (BK_WIDTH, BK_HEIGHT), (0, 0, 0, 160))
+        sheet = Image.new('RGBA', (BK_WIDTH, BK_HEIGHT), (bg_color[0], bg_color[1], bg_color[2], 160))
         cov_img.paste(sheet, (0, 0), sheet)
         
         # Cover Content
-        # Logo or Title
         logo_drawn = False
         if logo_path and logo_path.exists():
             try:
@@ -529,41 +605,38 @@ class ArtGenerator:
                 c_draw.text((lx, y_off), line, fill=(255, 255, 255), font=font_title)
                 y_off += 95
                 
-        # Season Name
+        # Season Name (using dynamic accent color)
         font_season = self._get_font(bold=True, size=48)
         season_str = season_name.upper()
         try:
             sw = c_draw.textlength(season_str, font=font_season)
         except AttributeError:
             sw = c_draw.textsize(season_str, font=font_season)[0]
-        c_draw.text(((BK_WIDTH - int(sw)) // 2, 1000), season_str, fill=(255, 215, 0), font=font_season)
+        c_draw.text(((BK_WIDTH - int(sw)) // 2, 1000), season_str, fill=accent_color, font=font_season)
         
-        # Subtitle: EPISODE GUIDE
         font_sub = self._get_font(bold=True, size=32)
         guide_text = "E P I S O D E   G U I D E"
         try:
             gw = c_draw.textlength(guide_text, font=font_sub)
         except AttributeError:
             gw = c_draw.textsize(guide_text, font=font_sub)[0]
-        c_draw.text(((BK_WIDTH - int(gw)) // 2, 1120), guide_text, fill=(200, 200, 200), font=font_sub)
+        c_draw.text(((BK_WIDTH - int(gw)) // 2, 1120), guide_text, fill=(210, 210, 215), font=font_sub)
         
-        # Draw a beautiful decorative frame outline
-        c_draw.rectangle([(80, 80), (BK_WIDTH - 80, BK_HEIGHT - 80)], outline=(255, 215, 0, 100), width=4)
+        # Double borders matching accent theme
+        c_draw.rectangle([(80, 80), (BK_WIDTH - 80, BK_HEIGHT - 80)], outline=(accent_color[0], accent_color[1], accent_color[2], 120), width=4)
         c_draw.rectangle([(95, 95), (BK_WIDTH - 95, BK_HEIGHT - 95)], outline=(255, 255, 255, 30), width=1)
         
-        # Bottom details
         bot_text = "JellyDisc DVD Authoring Suite"
         font_bot = self._get_font(bold=False, size=22)
         try:
             bw = c_draw.textlength(bot_text, font=font_bot)
         except AttributeError:
             bw = c_draw.textsize(bot_text, font=font_bot)[0]
-        c_draw.text(((BK_WIDTH - int(bw)) // 2, 1850), bot_text, fill=(130, 130, 140), font=font_bot)
+        c_draw.text(((BK_WIDTH - int(bw)) // 2, 1850), bot_text, fill=(140, 140, 150), font=font_bot)
         
         pages.append(cov_img)
         
         # --- INSIDE PAGES: EPISODES (2 episodes per page) ---
-        # Fonts for episode layouts
         font_ep_title = self._get_font(bold=True, size=32)
         font_ep_meta = self._get_font(bold=True, size=22)
         font_ep_desc = self._get_font(bold=False, size=22)
@@ -572,20 +645,16 @@ class ArtGenerator:
         total_eps = len(episodes)
         
         while ep_idx < total_eps:
-            # Create a new inside page
-            page_img = Image.new('RGB', (BK_WIDTH, BK_HEIGHT), (20, 20, 30))
+            page_img = Image.new('RGB', (BK_WIDTH, BK_HEIGHT), bg_color)
             p_draw = ImageDraw.Draw(page_img)
             
-            # Subtle top/bottom header/footer rule
-            p_draw.line([(100, 100), (BK_WIDTH - 100, 100)], fill=(255, 255, 255, 30), width=2)
-            p_draw.line([(100, BK_HEIGHT - 100), (BK_WIDTH - 100, BK_HEIGHT - 100)], fill=(255, 255, 255, 30), width=2)
+            p_draw.line([(100, 100), (BK_WIDTH - 100, 100)], fill=(accent_color[0], accent_color[1], accent_color[2], 40), width=2)
+            p_draw.line([(100, BK_HEIGHT - 100), (BK_WIDTH - 100, BK_HEIGHT - 100)], fill=(accent_color[0], accent_color[1], accent_color[2], 40), width=2)
             
-            # Running header
             header_txt = f"{series_name.upper()}  |  {season_name.upper()}"
             font_hdr = self._get_font(bold=True, size=18)
             p_draw.text((100, 60), header_txt, fill=(150, 150, 160), font=font_hdr)
             
-            # Page number
             p_num_txt = f"Page {len(pages) + 1}"
             try:
                 pnw = p_draw.textlength(p_num_txt, font=font_hdr)
@@ -593,9 +662,6 @@ class ArtGenerator:
                 pnw = p_draw.textsize(p_num_txt, font=font_hdr)[0]
             p_draw.text((BK_WIDTH - 100 - int(pnw), 60), p_num_txt, fill=(150, 150, 160), font=font_hdr)
             
-            # Process up to 2 episodes on this page
-            # Episode 1 layout: y_start = 160, y_end = 1060
-            # Episode 2 layout: y_start = 1110, y_end = 2010
             for slot in range(2):
                 if ep_idx >= total_eps:
                     break
@@ -603,102 +669,94 @@ class ArtGenerator:
                 ep = episodes[ep_idx]
                 y_start = 160 if slot == 0 else 1110
                 
-                # Draw Episode Thumbnail on the Left, details on the Right
+                # Thumbnail
                 thumb_w = 400
-                thumb_h = 225  # 16:9
+                thumb_h = 225
                 thumb_x = 100
                 thumb_y = y_start + 40
                 
-                # Draw white frame border for thumbnail
-                p_draw.rectangle([(thumb_x - 3, thumb_y - 3), (thumb_x + thumb_w + 3, thumb_y + thumb_h + 3)], outline=(255, 255, 255, 60), width=3)
+                p_draw.rectangle([(thumb_x - 3, thumb_y - 3), (thumb_x + thumb_w + 3, thumb_y + thumb_h + 3)], 
+                                 outline=(accent_color[0], accent_color[1], accent_color[2], 70), width=3)
                 
-                t_path = self.assets_dir / f"ep_{ep.index_number}_thumb.jpg"
+                curr_ep_idx = getattr(ep, "index_number", getattr(ep, "episode_index", ep_idx + 1))
+                curr_ep_name = getattr(ep, "name", getattr(ep, "episode_name", ""))
+                curr_ep_overview = getattr(ep, "overview", "No episode description available.")
+                curr_ep_runtime = getattr(ep, "runtime_minutes", 0)
+
+                t_path = self.assets_dir / f"ep_{curr_ep_idx}_thumb.jpg"
                 if t_path.exists():
                     try:
                         t_img = Image.open(t_path)
                         t_resized = self._resize_to_cover(t_img, thumb_w, thumb_h)
                         page_img.paste(t_resized, (thumb_x, thumb_y))
                     except Exception as e:
-                        logger.error(f"Folio: failed to paste thumbnail for E{ep.index_number}: {e}")
+                        logger.error(f"Folio: failed to paste thumbnail for E{curr_ep_idx}: {e}")
                         p_draw.rectangle([(thumb_x, thumb_y), (thumb_x + thumb_w, thumb_y + thumb_h)], fill=(40, 40, 60))
                 else:
-                    # Draw a nice grey placeholder box
                     p_draw.rectangle([(thumb_x, thumb_y), (thumb_x + thumb_w, thumb_y + thumb_h)], fill=(40, 40, 60))
                     
-                # Text Info on the Right of thumbnail
                 info_x = thumb_x + thumb_w + 50
                 info_w = BK_WIDTH - info_x - 100
                 
-                # Title: "E01. Pilot"
-                title_str = f"E{ep.index_number:02d}. {ep.name}"
+                title_str = f"E{curr_ep_idx:02d}. {curr_ep_name}"
                 title_lines = self._wrap_text(title_str, font_ep_title, info_w, p_draw)
-                ty = y_offset = y_start + 35
+                ty = y_start + 35
                 
-                for line in title_lines[:2]: # Max 2 lines for title
+                for line in title_lines[:2]:
                     p_draw.text((info_x, ty), line, fill=(255, 255, 255), font=font_ep_title)
                     ty += 40
                     
-                # Metadata (Runtime)
-                runtime = f"{int(ep.runtime_minutes)} minutes" if getattr(ep, "runtime_minutes", 0) > 0 else "N/A"
+                runtime = f"{int(curr_ep_runtime)} minutes" if curr_ep_runtime > 0 else "N/A"
                 meta_str = f"Runtime: {runtime}"
-                p_draw.text((info_x, ty + 10), meta_str, fill=(255, 215, 0), font=font_ep_meta)
+                p_draw.text((info_x, ty + 10), meta_str, fill=accent_color, font=font_ep_meta)
                 
-                # Description underneath
                 desc_y = thumb_y + thumb_h + 40
                 desc_w = BK_WIDTH - 200
                 
-                # Retrieve and clean overview
-                ep_overview = ep.overview or "No episode description available."
-                desc_wrapped = self._wrap_text(ep_overview, font_ep_desc, desc_w, p_draw)
+                desc_wrapped = self._wrap_text(curr_ep_overview, font_ep_desc, desc_w, p_draw)
                 
                 dy = desc_y
-                max_desc_lines = 11 if slot == 0 else 11
+                max_desc_lines = 11
                 for line in desc_wrapped[:max_desc_lines]:
-                    p_draw.text((100, dy), line, fill=(210, 210, 220), font=font_ep_desc)
+                    p_draw.text((100, dy), line, fill=(215, 215, 220), font=font_ep_desc)
                     dy += 32
                     
                 if len(desc_wrapped) > max_desc_lines:
-                    p_draw.text((100, dy), "...", fill=(210, 210, 220), font=font_ep_desc)
+                    p_draw.text((100, dy), "...", fill=(215, 215, 220), font=font_ep_desc)
                 
-                # Draw separator line between slot 0 and slot 1
                 if slot == 0 and ep_idx + 1 < total_eps:
-                    p_draw.line([(150, 1080), (BK_WIDTH - 150, 1080)], fill=(255, 255, 255, 20), width=1)
+                    p_draw.line([(150, 1080), (BK_WIDTH - 150, 1080)], fill=(accent_color[0], accent_color[1], accent_color[2], 25), width=1)
                     
                 ep_idx += 1
                 
             pages.append(page_img)
             
         # --- LAST PAGE: CAST / CREDITS ---
-        credit_img = Image.new('RGB', (BK_WIDTH, BK_HEIGHT), (15, 15, 25))
+        credit_img = Image.new('RGB', (BK_WIDTH, BK_HEIGHT), bg_color)
         cr_draw = ImageDraw.Draw(credit_img)
         
-        # Frame border
-        cr_draw.rectangle([(80, 80), (BK_WIDTH - 80, BK_HEIGHT - 80)], outline=(255, 255, 255, 20), width=2)
+        cr_draw.rectangle([(80, 80), (BK_WIDTH - 80, BK_HEIGHT - 80)], outline=(accent_color[0], accent_color[1], accent_color[2], 30), width=2)
         
         y_off = 180
         font_c_title = self._get_font(bold=True, size=46)
-        cr_draw.text((150, y_off), "CAST & CREW", fill=(255, 215, 0), font=font_c_title)
+        cr_draw.text((150, y_off), "CAST & CREW", fill=accent_color, font=font_c_title)
         
         y_off += 65
-        cr_draw.line([(150, y_off), (BK_WIDTH - 150, y_off)], fill=(255, 255, 255, 30), width=2)
+        cr_draw.line([(150, y_off), (BK_WIDTH - 150, y_off)], fill=(accent_color[0], accent_color[1], accent_color[2], 40), width=2)
         
         y_off += 60
         font_c_item = self._get_font(bold=False, size=24)
-        font_c_label = self._get_font(bold=True, size=24)
         
         if actors:
-            # Layout cast in two columns
             cr_col_w = (BK_WIDTH - 300) // 2
-            for a_idx, actor in enumerate(actors[:24]):  # Limit to 24 actors
+            for a_idx, actor in enumerate(actors[:24]):
                 col = a_idx % 2
                 row = a_idx // 2
                 
                 ax = 150 + (col * cr_col_w)
                 ay = y_off + (row * 50)
                 
-                # Print actor
                 actor_txt = f"•  {actor}"
-                # Truncate if needed
                 try:
                     al = cr_draw.textlength(actor_txt, font=font_c_item)
                 except AttributeError:
@@ -715,9 +773,8 @@ class ArtGenerator:
         else:
             cr_draw.text((150, y_off), "No cast information available.", fill=(180, 180, 180), font=font_c_item)
             
-        # Draw a beautiful summary note at the bottom
         note_y = 1600
-        cr_draw.line([(150, note_y), (BK_WIDTH - 150, note_y)], fill=(255, 255, 255, 20), width=1)
+        cr_draw.line([(150, note_y), (BK_WIDTH - 150, note_y)], fill=(accent_color[0], accent_color[1], accent_color[2], 25), width=1)
         
         note_str = "This season was compiled, transcoded, and authored using the JellyDisc DVD Authoring Suite. All titles, episode information, and cover artwork are sourced directly from your Jellyfin server library."
         font_note = self._get_font(bold=False, size=20)
@@ -735,9 +792,7 @@ class ArtGenerator:
             
         pages.append(credit_img)
         
-        # Save as multi-page PDF
         final_pdf_path = output_path
-        # PDF format requires converting to RGB (they are already RGB, but safety check)
         rgb_pages = [p.convert('RGB') for p in pages]
         
         rgb_pages[0].save(
@@ -765,18 +820,20 @@ class ArtGenerator:
         """
         logger.info(f"Generating DVD Disc Face Label for {series_name} Disc {disc_num}...")
         
+        # Extract theme colors (passing backdrop)
+        bg_rgb, accent_rgb = self._extract_theme_colors(None, backdrop_path)
+        accent_color = (accent_rgb[0], accent_rgb[1], accent_rgb[2], 255)
+        
         # Dimensions for CD/DVD (120mm x 120mm at 300 DPI)
         lbl_size = 1417
         canvas = Image.new('RGBA', (lbl_size, lbl_size), (0, 0, 0, 0))
         draw = ImageDraw.Draw(canvas)
         
-        # 1. Background image (aspect cover cropped to square)
         bg_drawn = False
         if backdrop_path and backdrop_path.exists():
             try:
                 bd = Image.open(backdrop_path)
                 bd_cropped = self._resize_to_cover(bd, lbl_size, lbl_size)
-                # Blur background slightly for text readability
                 bd_blurred = bd_cropped.filter(ImageFilter.GaussianBlur(8))
                 canvas.paste(bd_blurred, (0, 0))
                 bg_drawn = True
@@ -784,19 +841,15 @@ class ArtGenerator:
                 logger.error(f"Failed to draw backdrop on disc label: {e}")
                 
         if not bg_drawn:
-            # Fallback to dark solid circle
-            draw.ellipse([0, 0, lbl_size, lbl_size], fill=(20, 20, 30, 255))
+            draw.ellipse([0, 0, lbl_size, lbl_size], fill=(bg_rgb[0], bg_rgb[1], bg_rgb[2], 255))
             
-        # Draw dark slate glass overlay on the disc face
-        glass = Image.new('RGBA', (lbl_size, lbl_size), (12, 12, 20, 160))
+        glass = Image.new('RGBA', (lbl_size, lbl_size), (bg_rgb[0], bg_rgb[1], bg_rgb[2], 160))
         canvas.paste(glass, (0, 0), glass)
         
-        # 2. Draw Series Logo or Title
         logo_drawn = False
         if logo_path and logo_path.exists():
             try:
                 logo = Image.open(logo_path).convert('RGBA')
-                # Scale logo to fit top area of disc (max width 750, max height 220)
                 logo.thumbnail((750, 220), Image.Resampling.LANCZOS)
                 lw, lh = logo.size
                 lx = (lbl_size - lw) // 2
@@ -820,7 +873,6 @@ class ArtGenerator:
                 draw.text((lx, y_off), line, fill=(255, 255, 255, 255), font=font_title)
                 y_off += 65
 
-        # 3. Draw Season Name and Disc Indicator (Middle / Right of center hole)
         font_meta = self._get_font(bold=True, size=28)
         
         disc_text = f"DISC {disc_num} OF {total_discs}" if total_discs > 1 else f"DISC {disc_num}"
@@ -833,7 +885,7 @@ class ArtGenerator:
         except AttributeError:
             sw = draw.textsize(season_str, font=font_meta)[0]
         sx = (lbl_size - int(sw)) // 2
-        draw.text((sx, y_meta), season_str, fill=(255, 215, 0, 255), font=font_meta) # Gold
+        draw.text((sx, y_meta), season_str, fill=accent_color, font=font_meta)
         
         y_disc = y_meta + 40
         try:
@@ -843,7 +895,6 @@ class ArtGenerator:
         dx = (lbl_size - int(dw)) // 2
         draw.text((dx, y_disc), disc_text, fill=(255, 255, 255, 255), font=font_meta)
 
-        # 4. List Episodes on this disc horizontally in a single line (y = 980)
         if episodes:
             font_ep = self._get_font(bold=False, size=18)
             ep_titles = []
@@ -865,7 +916,6 @@ class ArtGenerator:
                 draw.text((ex, y_ep), line, fill=(200, 200, 205, 255), font=font_ep)
                 y_ep += 25
 
-        # 5. Technical Logos and Legal Disclaimer along bottom rim
         font_badge = self._get_font(bold=True, size=20)
         badge_text = "DVD VIDEO  |  DOLBY DIGITAL"
         try:
@@ -884,7 +934,7 @@ class ArtGenerator:
         lx = (lbl_size - int(lw)) // 2
         draw.text((lx, 1220), legal_text, fill=(120, 120, 120, 255), font=font_legal)
 
-        # 6. Apply circular disc and inner hole mask to make corners and center transparent
+        # Apply circular masks
         mask = Image.new('L', (lbl_size, lbl_size), 0)
         mask_draw = ImageDraw.Draw(mask)
         mask_draw.ellipse([0, 0, lbl_size, lbl_size], fill=255)
@@ -895,16 +945,17 @@ class ArtGenerator:
         final_alpha.paste(mask, (0, 0), mask)
         canvas.putalpha(final_alpha)
         
+        # Guide lines using accent theme
         guide_canvas = Image.new('RGBA', (lbl_size, lbl_size), (0, 0, 0, 0))
         guide_draw = ImageDraw.Draw(guide_canvas)
-        guide_draw.ellipse([0, 0, lbl_size - 1, lbl_size - 1], outline=(255, 255, 255, 40), width=2)
-        guide_draw.ellipse([578, 578, 838, 838], outline=(255, 255, 255, 40), width=1)
+        guide_draw.ellipse([0, 0, lbl_size - 1, lbl_size - 1], outline=(accent_rgb[0], accent_rgb[1], accent_rgb[2], 60), width=2)
+        guide_draw.ellipse([578, 578, 838, 838], outline=(accent_rgb[0], accent_rgb[1], accent_rgb[2], 40), width=1)
         canvas = Image.alpha_composite(canvas, guide_canvas)
 
         white_bg = Image.new('RGB', (lbl_size, lbl_size), (255, 255, 255))
         w_draw = ImageDraw.Draw(white_bg)
-        w_draw.ellipse([0, 0, lbl_size - 1, lbl_size - 1], outline=(200, 200, 200), width=1)
-        w_draw.ellipse([578, 578, 838, 838], outline=(200, 200, 200), width=1)
+        w_draw.ellipse([0, 0, lbl_size - 1, lbl_size - 1], outline=(accent_rgb[0], accent_rgb[1], accent_rgb[2], 30), width=1)
+        w_draw.ellipse([578, 578, 838, 838], outline=(accent_rgb[0], accent_rgb[1], accent_rgb[2], 30), width=1)
         
         white_bg.paste(canvas, (0, 0), canvas)
         
