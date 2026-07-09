@@ -1842,9 +1842,9 @@ def run_cli(args):
     print(f"✓ Selected: {season.name} with {len(season.episodes)} episodes.")
     
     # Setup working folders
-    assets_dir = Path("assets")
-    staging_dir = Path("staging")
-    output_dir = Path("output")
+    assets_dir = Path("assets").resolve()
+    staging_dir = Path("staging").resolve()
+    output_dir = Path("output").resolve()
     assets_dir.mkdir(parents=True, exist_ok=True)
     staging_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
