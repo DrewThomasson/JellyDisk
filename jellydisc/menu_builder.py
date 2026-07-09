@@ -296,7 +296,8 @@ class MenuBuilder:
         header_end_y = self._draw_menu_header(bg_image, draw, logo_path)
         
         # Build button labels dynamically based on availability
-        button_labels = ["PLAY ALL"]
+        main_button = "PLAY MOVIE" if not show_episode_select else "PLAY ALL"
+        button_labels = [main_button]
         if show_episode_select:
             button_labels.append("EPISODE SELECT")
         if self.config.include_cast:
