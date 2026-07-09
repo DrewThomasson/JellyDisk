@@ -1344,12 +1344,12 @@ def generate_trivia_questions(
     writers: Optional[list[str]] = None
 ) -> list[dict]:
     """
-    Generate trivia questions dynamically from local Jellyfin metadata fields.
+    Generate trivia questions dynamically from local Jellyfin metadata fields (up to 5 questions).
     """
     questions = []
     import random
     
-    # 1. Cast Question
+    # 1. Cast Questions (generate up to 2 distinct questions)
     valid_actors = []
     if actors:
         for actor in actors:
@@ -1357,31 +1357,32 @@ def generate_trivia_questions(
                 valid_actors.append(actor)
                 
     if valid_actors:
-        chosen = random.choice(valid_actors)
-        name, role = chosen.split(" as ", 1)
-        role = role.strip()
-        name = name.strip()
-        
-        other_names = [act.split(" as ")[0].strip() for act in actors if act != chosen]
-        fallback_names = ["Zach Hadel", "Michael Cusack", "Drew Thomasson", "John Carpenter", "Kurt Russell", "Donald Pleasence"]
-        for f in fallback_names:
-            if f not in other_names and f != name:
-                other_names.append(f)
-                
-        distractors = random.sample(other_names, min(len(other_names), 3))
-        while len(distractors) < 3:
-            distractors.append(f"Generic Actor {len(distractors) + 1}")
+        chosen_actors = random.sample(valid_actors, min(2, len(valid_actors)))
+        for chosen in chosen_actors:
+            name, role = chosen.split(" as ", 1)
+            role = role.strip()
+            name = name.strip()
             
-        options = distractors + [name]
-        random.shuffle(options)
-        correct_idx = options.index(name)
-        
-        questions.append({
-            "question": f"Who plays the character '{role}' in {series_name}?",
-            "options": options,
-            "correct_index": correct_idx
-        })
-        
+            other_names = [act.split(" as ")[0].strip() for act in actors if act != chosen]
+            fallback_names = ["Zach Hadel", "Michael Cusack", "Drew Thomasson", "John Carpenter", "Kurt Russell", "Donald Pleasence"]
+            for f in fallback_names:
+                if f not in other_names and f != name:
+                    other_names.append(f)
+                    
+            distractors = random.sample(other_names, min(len(other_names), 3))
+            while len(distractors) < 3:
+                distractors.append(f"Generic Actor {len(distractors) + 1}")
+                
+            options = distractors + [name]
+            random.shuffle(options)
+            correct_idx = options.index(name)
+            
+            questions.append({
+                "question": f"Who plays the character '{role}' in {series_name}?",
+                "options": options,
+                "correct_index": correct_idx
+            })
+            
     # 2. Release Year Question
     if release_year:
         try:
@@ -1405,7 +1406,39 @@ def generate_trivia_questions(
             "correct_index": correct_idx
         })
         
-    # 3. Episode / Synopsis Question
+    # 3. Director Question (especially for movies)
+    if directors:
+        dir_name = directors[0]
+        other_dirs = ["Steven Spielberg", "Christopher Nolan", "Quentin Tarantino", "Martin Scorsese", "James Cameron"]
+        distractors = [d for d in other_dirs if d != dir_name]
+        distractors = random.sample(distractors, 3)
+        options = distractors + [dir_name]
+        random.shuffle(options)
+        correct_idx = options.index(dir_name)
+        
+        questions.append({
+            "question": f"Who directed the movie {series_name}?",
+            "options": options,
+            "correct_index": correct_idx
+        })
+        
+    # 4. Writer/Creator Question
+    if writers:
+        writer_name = writers[0]
+        other_writers = ["George Lucas", "Stephen King", "Harold Ramis", "John Carpenter", "Nick Castle"]
+        distractors = [w for w in other_writers if w != writer_name]
+        distractors = random.sample(distractors, 3)
+        options = distractors + [writer_name]
+        random.shuffle(options)
+        correct_idx = options.index(writer_name)
+        
+        questions.append({
+            "question": f"Who is listed as a writer for {series_name}?",
+            "options": options,
+            "correct_index": correct_idx
+        })
+        
+    # 5. Episode Question (especially for TV shows)
     if episodes and len(episodes) > 1:
         real_ep = random.choice(episodes)
         real_name = getattr(real_ep, "name", getattr(real_ep, "episode_name", ""))
@@ -1432,33 +1465,32 @@ def generate_trivia_questions(
             "options": options,
             "correct_index": correct_idx
         })
-    elif directors:
-        dir_name = directors[0]
-        other_dirs = ["Steven Spielberg", "Christopher Nolan", "Quentin Tarantino", "Martin Scorsese", "James Cameron"]
-        distractors = [d for d in other_dirs if d != dir_name]
-        distractors = random.sample(distractors, 3)
-        options = distractors + [dir_name]
-        random.shuffle(options)
-        correct_idx = options.index(dir_name)
         
-        questions.append({
-            "question": f"Who directed the movie {series_name}?",
-            "options": options,
-            "correct_index": correct_idx
-        })
-        
-    # Make sure we always have at least 3 questions
-    if len(questions) < 3:
-        questions.append({
+    # 6. Fallback General DVD/Movie Questions (to fill up to 5 questions if needed)
+    fallback_q = [
+        {
             "question": "What is the standard aspect ratio of a standard definition DVD?",
             "options": ["4:3", "16:9 Anamorphic", "2.39:1 Cinema", "1.33:1 IMAX"],
             "correct_index": 1
-        })
-        questions.append({
+        },
+        {
             "question": "Which video standard is traditionally used in Europe and Asia?",
             "options": ["NTSC", "PAL", "SECAM", "ATSC"],
             "correct_index": 1
-        })
-        
-    return questions[:3]
+        },
+        {
+            "question": "Which optical disc format succeeded the DVD in 2006?",
+            "options": ["HD-DVD", "Blu-ray Disc", "LaserDisc", "VCD"],
+            "correct_index": 1
+        }
+    ]
+    
+    for f_q in fallback_q:
+        if len(questions) >= 5:
+            break
+        # Avoid duplicate questions
+        if f_q["question"] not in [q["question"] for q in questions]:
+            questions.append(f_q)
+            
+    return questions[:5]
 
