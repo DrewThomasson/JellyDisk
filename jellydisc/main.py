@@ -75,6 +75,36 @@ def sanitize_filename(name: str, max_length: int = 200) -> str:
     return safe[:max_length].strip()
 
 
+def get_chapters_string(dur_seconds: float, original_chapters: list[float] = None) -> str:
+    """
+    Format chapter points as a comma-separated string for dvdauthor.
+    """
+    if original_chapters:
+        time_strs = []
+        for ch in original_chapters:
+            if ch < dur_seconds:
+                h = int(ch // 3600)
+                m = int((ch % 3600) // 60)
+                s = int(ch % 60)
+                time_strs.append(f"{h:02d}:{m:02d}:{s:02d}")
+        # Ensure "00:00:00" is at the start
+        if "00:00:00" not in time_strs and "0:00:00" not in time_strs:
+            time_strs.insert(0, "00:00:00")
+        return ",".join(time_strs)
+        
+    # Fallback: generate chapters every 5 minutes (300 seconds)
+    time_strs = ["00:00:00"]
+    ch_interval = 300.0
+    current_ch = ch_interval
+    while current_ch < dur_seconds - 60.0:  # don't place a chapter in the last minute
+        h = int(current_ch // 3600)
+        m = int((current_ch % 3600) // 60)
+        s = int(current_ch % 60)
+        time_strs.append(f"{h:02d}:{m:02d}:{s:02d}")
+        current_ch += ch_interval
+    return ",".join(time_strs)
+
+
 def parse_people_metadata(series, details):
     """
     Parse People metadata (Actors, Directors, Writers) and save onto the Series/Movie object.
@@ -1446,12 +1476,9 @@ class JellyDiscApp(_BaseClass):
             
             # Calculate optimal bitrate for this specific disc
             disc_bitrate = transcoder.calculate_optimal_bitrate(disc_plan.total_minutes)
-            
-            # Step 1: Transcode episodes
-            self._update_task(f"Disc {disc_num}: Transcoding episodes...", 0.7)
-            
             total_episodes = len(disc_plan.episodes)
             transcoded_files = []
+            ep_chapters = {}
             
             for i, job in enumerate(disc_plan.episodes):
                 self._update_task(
@@ -1463,15 +1490,35 @@ class JellyDiscApp(_BaseClass):
                 srt_path = job.output_path.with_suffix('.srt')
                 if include_subs:
                     import re
-                    match = re.search(r'/Items/([^/]+)/Download', job.input_path)
-                    if match:
-                        ep_id = match.group(1)
-                        if not srt_path.exists():
-                            download_episode_subtitles(self.jellyfin_client, ep_id, srt_path)
+                    try:
+                        self._log(f"Downloading subtitles for E{job.episode_index}...")
+                        sub_tracks = self.jellyfin_client.get_subtitle_tracks(job.item_id)
+                        # Filter for English or default to first track
+                        eng_tracks = [t for t in sub_tracks if t.get('Language') == 'eng']
+                        selected_track = eng_tracks[0] if eng_tracks else (sub_tracks[0] if sub_tracks else None)
                         
-                # 2. Check if we can skip transcode
-                skip_transcode = job.output_path.exists() and job.output_path.stat().st_size > 10 * 1024 * 1024
-                if skip_transcode and include_subs:
+                        if selected_track:
+                            sub_format = selected_track.get('Codec', 'srt')
+                            sub_data = self.jellyfin_client.download_subtitle(job.item_id, selected_track['Index'], sub_format)
+                            
+                            # Clean WebVTT tags if necessary
+                            if sub_format == 'vtt':
+                                sub_data = re.sub(r'WEBVTT\r?\n\r?\n', '', sub_data)
+                                sub_data = re.sub(r'(\d\d:\d\d:\d\d)\.(\d\d\d)', r'\1,\2', sub_data)
+                                
+                            with open(srt_path, 'w', encoding='utf-8') as sf:
+                                sf.write(sub_data)
+                            self._log(f"✓ Subtitles downloaded to {srt_path.name}")
+                        else:
+                            self._log("No subtitle tracks found.")
+                    except Exception as e:
+                        self._log(f"⚠️ Failed to download subtitles: {e}")
+                
+                # 2. Check cache first
+                skip_transcode = True
+                if not job.output_path.exists():
+                    skip_transcode = False
+                elif include_subs:
                     if not srt_path.exists():
                         skip_transcode = False
                     elif srt_path.stat().st_mtime > job.output_path.stat().st_mtime:
@@ -1525,6 +1572,11 @@ class JellyDiscApp(_BaseClass):
                         progress_callback=transcode_progress,
                         extract_subs=include_subs
                     )
+                    # Extract original chapters before deleting temp file
+                    try:
+                        ep_chapters[job.episode_index] = transcoder.get_chapters(str(temp_input_path))
+                    except Exception:
+                        pass
                     transcoded_files.append(job.output_path)
                     self._log(f"✓ E{job.episode_index} completed.")
                     
@@ -1606,12 +1658,20 @@ class JellyDiscApp(_BaseClass):
             self._update_task(f"Disc {disc_num}: Building DVD structure...", 0.75)
             self._log("Building DVD structure...")
             
+            # Format chapters for this disc
+            chapters_list = []
+            for job in disc_plan.episodes:
+                orig_ch = ep_chapters.get(job.episode_index)
+                ch_str = get_chapters_string(job.duration_seconds, orig_ch)
+                chapters_list.append(ch_str)
+                
             xml_path = menu_builder.generate_dvdauthor_xml(
                 transcoded_files,
                 menu_main_vid,
                 menu_episode_vids,
                 menu_cast_paths=menu_cast_vids if menu_cast_vids else None,
-                menu_trailer_path=disc_trailer_path
+                menu_trailer_path=disc_trailer_path,
+                chapters_list=chapters_list
             )
             
             # Step 6: Build DVD structure
@@ -2194,6 +2254,7 @@ def run_cli(args):
         
         # Transcode episodes
         transcoded_files = []
+        ep_chapters = {}
         for job in disc_plan.episodes:
             # 1. Download subtitles first if requested
             srt_path = job.output_path.with_suffix('.srt')
@@ -2209,7 +2270,7 @@ def run_cli(args):
             skip_transcode = job.output_path.exists() and job.output_path.stat().st_size > 10 * 1024 * 1024
             if skip_transcode and include_subs:
                 if not srt_path.exists():
-                    skip_transcode = False
+                     skip_transcode = False
                 elif srt_path.stat().st_mtime > job.output_path.stat().st_mtime:
                     # Subtitle file is newer than the video (newly downloaded)
                     skip_transcode = False
@@ -2232,6 +2293,11 @@ def run_cli(args):
             
             print(f"  Transcoding E{job.episode_index}...")
             transcoder.transcode(str(temp_input), job.output_path, video_bitrate=disc_bitrate, extract_subs=include_subs)
+            # Extract original chapters before deleting temp file
+            try:
+                ep_chapters[job.episode_index] = transcoder.get_chapters(str(temp_input))
+            except Exception:
+                pass
             temp_input.unlink()
             transcoded_files.append(job.output_path)
             print(f"  ✓ E{job.episode_index} transcode complete.")
@@ -2277,8 +2343,21 @@ def run_cli(args):
                 
         # dvdauthor structure
         print("  Assembling DVD filesystem structure...")
+        
+        # Format chapters for this disc
+        chapters_list = []
+        for job in disc_plan.episodes:
+            orig_ch = ep_chapters.get(job.episode_index)
+            ch_str = get_chapters_string(job.duration_seconds, orig_ch)
+            chapters_list.append(ch_str)
+            
         xml_path = menu_builder.generate_dvdauthor_xml(
-            transcoded_files, menu_main_vid, menu_episode_vids, menu_cast_paths=menu_cast_vids if menu_cast_vids else None, menu_trailer_path=disc_trailer
+            transcoded_files,
+            menu_main_vid,
+            menu_episode_vids,
+            menu_cast_paths=menu_cast_vids if menu_cast_vids else None,
+            menu_trailer_path=disc_trailer,
+            chapters_list=chapters_list
         )
         dvd_dir = menu_builder.build_dvd_structure(xml_path)
         

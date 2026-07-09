@@ -847,6 +847,7 @@ class MenuBuilder:
         menu_episode_paths: list[Path],
         menu_cast_paths: Optional[list[Path]] = None,
         menu_trailer_path: Optional[Path] = None,
+        chapters_list: Optional[list[str]] = None,
         output_path: Optional[Path] = None
     ) -> Path:
         """
@@ -1014,9 +1015,13 @@ class MenuBuilder:
           call menu;
         </post>'''
                 
+            chapters_attr = ""
+            if chapters_list and i < len(chapters_list) and chapters_list[i]:
+                chapters_attr = f' chapters="{chapters_list[i]}"'
+                
             title_pgcs.append(f'''      <!-- Title {title_num}: Episode {i+1} -->
       <pgc>
-        <vob file="{vf}" />
+        <vob file="{vf}"{chapters_attr} />
 {post_cmd}
       </pgc>''')
       

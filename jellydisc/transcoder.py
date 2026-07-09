@@ -194,6 +194,35 @@ class Transcoder:
         except (subprocess.TimeoutExpired, ValueError) as e:
             logger.warning(f"Error getting duration: {e}")
             return 0.0
+
+    def get_chapters(self, input_path: str) -> list[float]:
+        """
+        Extract chapter start times (in seconds) from a media file using ffprobe.
+        If no chapters exist, returns an empty list.
+        """
+        cmd = [
+            self._ffprobe_path,
+            "-show_chapters",
+            "-print_format", "json",
+            "-v", "quiet",
+            input_path
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            if result.returncode == 0:
+                import json
+                data = json.loads(result.stdout)
+                chapters_data = data.get("chapters", [])
+                chapters = []
+                for ch in chapters_data:
+                    start_time = float(ch.get("start_time", 0.0))
+                    chapters.append(start_time)
+                # Keep them unique and sorted
+                return sorted(list(set(chapters)))
+        except Exception as e:
+            logger.warning(f"Error getting chapters: {e}")
+            
+        return []
     
     def get_media_info(self, input_path: str) -> dict:
         """
