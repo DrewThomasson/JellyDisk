@@ -1955,10 +1955,31 @@ def run_cli(args):
     password = args.password or os.environ.get("JELLYFIN_PASS")
     show_query = args.show
     
-    if not server_url or not username or not password or not show_query:
-        print("❌ Error: Missing required connection parameters (--server, --username, --password, --show)")
-        print("Use --help to see all options or set environment variables JELLYFIN_URL, JELLYFIN_USER, JELLYFIN_PASS.")
-        sys.exit(1)
+    is_interactive = sys.stdin.isatty()
+    missing_args = not server_url or not username or not password or not show_query
+    
+    if missing_args:
+        if not is_interactive:
+            print("❌ Error: Missing required connection parameters (--server, --username, --password, --show) in non-interactive environment.")
+            sys.exit(1)
+            
+        print("\n==================================================")
+        print("    JellyDisc - Interactive DVD Creator Wizard")
+        print("==================================================\n")
+        
+        if not server_url:
+            server_url = input("🔗 Jellyfin Server URL (e.g. https://your-jellyfin-server.com): ").strip()
+            while not server_url:
+                server_url = input("🔗 Jellyfin Server URL: ").strip()
+        if not username:
+            username = input("👤 Username: ").strip()
+            while not username:
+                username = input("👤 Username: ").strip()
+        if not password:
+            import getpass
+            password = getpass.getpass("🔑 Password: ").strip()
+            while not password:
+                password = getpass.getpass("🔑 Password: ").strip()
 
     print(f"Connecting to: {server_url}...")
     client = JellyfinClient(server_url)
@@ -1969,14 +1990,43 @@ def run_cli(args):
         print(f"❌ Connection failed: {e}")
         sys.exit(1)
         
+    if missing_args and not show_query:
+        show_query = input("🔍 Enter TV Show or Movie name to search: ").strip()
+        while not show_query:
+            show_query = input("🔍 Enter TV Show or Movie name to search: ").strip()
+
     # Search show
     print(f"Searching for '{show_query}'...")
     shows = client.search_library(show_query)
-    if not shows:
+    while not shows:
         print(f"❌ Media '{show_query}' not found.")
-        sys.exit(1)
+        if is_interactive:
+            show_query = input("🔍 Enter TV Show or Movie name to search (or 'exit' to quit): ").strip()
+            if show_query.lower() == 'exit':
+                sys.exit(0)
+            shows = client.search_library(show_query)
+        else:
+            sys.exit(1)
         
-    series = shows[0]
+    series = None
+    if len(shows) > 1 and is_interactive:
+        print("\nMultiple matching titles found:")
+        for idx, s in enumerate(shows):
+            media_type = getattr(s, "type", "Series")
+            print(f"  [{idx + 1}] {s.name} ({media_type})")
+        while True:
+            sel_idx_str = input(f"Select a title [1-{len(shows)}]: ").strip()
+            try:
+                sel_idx = int(sel_idx_str)
+                if 1 <= sel_idx <= len(shows):
+                    series = shows[sel_idx - 1]
+                    break
+            except ValueError:
+                pass
+            print(f"Please enter a number between 1 and {len(shows)}.")
+    else:
+        series = shows[0]
+        
     print(f"✓ Found media: {series.name} (ID: {series.id})")
     
     try:
@@ -2004,8 +2054,26 @@ def run_cli(args):
             print(f"❌ Season '{args.season}' not found.")
             sys.exit(1)
     else:
-        season = seasons[0]
-        print(f"Defaulting to Season: {season.name}")
+        if len(seasons) == 1:
+            season = seasons[0]
+            print(f"Selected Season: {season.name}")
+        elif len(seasons) > 1 and is_interactive:
+            print(f"\nSeasons available for {series.name}:")
+            for idx, s in enumerate(seasons):
+                print(f"  [{idx + 1}] {s.name}")
+            while True:
+                sel_idx_str = input(f"Select a season [1-{len(seasons)}]: ").strip()
+                try:
+                    sel_idx = int(sel_idx_str)
+                    if 1 <= sel_idx <= len(seasons):
+                        season = seasons[sel_idx - 1]
+                        break
+                except ValueError:
+                    pass
+                print(f"Please enter a number between 1 and {len(seasons)}.")
+        else:
+            season = seasons[0]
+            print(f"Defaulting to Season: {season.name}")
         
     # Episodes
     print("Fetching episode details...")
@@ -2034,11 +2102,93 @@ def run_cli(args):
     current_staging_dir = staging_dir / series_folder / season_folder
     current_staging_dir.mkdir(parents=True, exist_ok=True)
     
-    # Plan spanning
+    # Plan spanning & Options
     video_standard = VideoStandard.NTSC if args.standard == "NTSC" else VideoStandard.PAL
     menu_style = MenuStyle.MODERN if args.style == "Modern" else MenuStyle.RETRO
     include_subs = not args.no_subs
     include_trailer = not args.no_trailer
+    
+    burn_disc = args.burn
+    erase_disc = args.erase
+    drive_path = args.drive
+    
+    if missing_args and is_interactive:
+        # Prompt for optional configs
+        if not args.no_subs:
+            sub_choice = input("💬 Include subtitles on the DVD? (Y/n): ").strip().lower()
+            if sub_choice in ('n', 'no'):
+                include_subs = False
+        if not args.no_trailer:
+            trail_choice = input("🎥 Include trailer (YouTube lookup)? (Y/n): ").strip().lower()
+            if trail_choice in ('n', 'no'):
+                include_trailer = False
+                
+        style_choice = input("🎨 Menu layout style: [1] Modern (clean dark), [2] Retro (classic) [Default: 1]: ").strip()
+        if style_choice == '2':
+            menu_style = MenuStyle.RETRO
+            
+        std_choice = input("📺 DVD format standard: [1] NTSC (US/Japan), [2] PAL (Europe/Asia) [Default: 1]: ").strip()
+        if std_choice == '2':
+            video_standard = VideoStandard.PAL
+            
+        if not args.burn:
+            burn_choice = input("💿 Do you want to burn the final ISO to a physical DVD disc? (y/N): ").strip().lower()
+            if burn_choice in ('y', 'yes'):
+                burn_disc = True
+                
+                burner = Burner()
+                drives = burner.detect_drives()
+                
+                import platform
+                is_in_docker = os.path.exists("/.dockerenv")
+                is_docker_desktop = is_in_docker and "linuxkit" in platform.release().lower()
+                
+                if not drives:
+                    print("\n⚠️ No optical drives detected.")
+                    if is_docker_desktop:
+                        print("   Note: You are running inside Docker Desktop on a macOS/Windows host.")
+                        print("   Docker Desktop does not support optical drive (device) passthrough.")
+                        print("   Please generate the ISO here and burn it using your host computer instead.\n")
+                    burn_disc = False
+                else:
+                    print("\nDetected optical drives:")
+                    for idx, d in enumerate(drives):
+                        print(f"  [{idx + 1}] {d.name} ({d.device_path})")
+                    while True:
+                        drive_choice = input(f"Select a drive number [1-{len(drives)}]: ").strip()
+                        try:
+                            sel_idx = int(drive_choice)
+                            if 1 <= sel_idx <= len(drives):
+                                drive_path = drives[sel_idx - 1].device_path
+                                break
+                        except ValueError:
+                            pass
+                        print(f"Please enter a number between 1 and {len(drives)}.")
+                        
+                    erase_choice = input("🧹 Erase/Format rewritable media in the drive first? (y/N): ").strip().lower()
+                    if erase_choice in ('y', 'yes'):
+                        erase_disc = True
+                        
+        # Final wizard confirmation
+        print("\n" + "="*40)
+        print("       DVD Authoring Summary")
+        print("="*40)
+        print(f"  Show/Movie : {series.name}")
+        if getattr(series, "type", "Series") != "Movie":
+            print(f"  Season     : {season.name}")
+        print(f"  Subtitles  : {'Yes' if include_subs else 'No'}")
+        print(f"  Trailers   : {'Yes' if include_trailer else 'No'}")
+        print(f"  Menu Style : {menu_style.name}")
+        print(f"  Standard   : {video_standard.name}")
+        print(f"  Burn Disc  : {'Yes' if burn_disc else 'No'}")
+        if burn_disc:
+            print(f"    - Drive  : {drive_path}")
+            print(f"    - Erase  : {'Yes' if erase_disc else 'No'}")
+        print("="*40)
+        confirm = input("\nProceed with DVD creation? (Y/n): ").strip().lower()
+        if confirm in ('n', 'no'):
+            print("Aborted.")
+            sys.exit(0)
     
     transcoder = Transcoder(current_staging_dir, VideoSettings(video_standard))
     
@@ -2423,9 +2573,9 @@ def run_cli(args):
         print(f"✓ Disc {p.disc_number} Label PDF saved to: {label_pdf}")
         
     # Erase / Burn if requested
-    if args.burn and iso_files:
+    if burn_disc and iso_files:
         print("\n--- Burning to Optical Media ---")
-        drive = args.drive
+        drive = drive_path
         if not drive:
             detected = burner.detect_drives()
             if detected:
@@ -2446,7 +2596,7 @@ def run_cli(args):
             print("❌ Burning cancelled.")
             sys.exit(1)
             
-        if args.erase:
+        if erase_disc:
             print(f"Erasing rewritable media in drive {drive}...")
             burner.erase_media(device=drive)
             

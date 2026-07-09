@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  jellydisc:
+    build: .
+    image: jellydisc:latest
+    container_name: jellydisc
+    stdin_open: true  # Allows interactive TTY input
+    tty: true         # Allocates a pseudo-TTY for input prompts
+    volumes:
+      - ./assets:/app/assets
+      - ./staging:/app/staging
+      - ./output:/app/output
+    environment:
+      - JELLYFIN_URL=${JELLYFIN_URL:-}
+      - JELLYFIN_USER=${JELLYFIN_USER:-}
+      - JELLYFIN_PASS=${JELLYFIN_PASS:-}
+    # Uncomment the following block when running on a Linux host (e.g. Ubuntu)
+    # to pass through your optical drive for direct disc burning:
+    # devices:
+    #   - /dev/sr0:/dev/sr0

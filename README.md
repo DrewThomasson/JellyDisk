@@ -132,6 +132,38 @@ python -m jellydisc.main --headless \
   python -m jellydisc.main --erase --drive "/dev/rdisk4"
   ```
 
+### Running via Docker (Compose)
+
+JellyDisc is fully dockerized and supports a guided **Interactive Terminal Wizard** so you can author DVDs without needing to install Python, FFmpeg, or `dvdauthor` on your host machine.
+
+#### 1. Setup Environment Credentials (Optional)
+To avoid typing your credentials, create a `.env` file in the root directory:
+```env
+JELLYFIN_URL=https://your-jellyfin-server.com
+JELLYFIN_USER=your_username
+JELLYFIN_PASS=your_password
+```
+
+#### 2. Run the Interactive Wizard
+Simply execute the container:
+```bash
+docker compose run --rm jellydisc
+```
+This will start the interactive setup wizard inside your terminal, prompting you to search for a media title, choose a season, configure subtitles, and select options.
+
+#### 3. Run directly with CLI Flags
+If you want to run it headlessly without the interactive prompts, supply standard CLI flags:
+```bash
+docker compose run --rm jellydisc --show "Smiling Friends" --season "2"
+```
+
+#### 4. Burning to Physical Discs (Linux/Ubuntu only)
+Uncomment the `devices` configuration in your `docker-compose.yml` file to expose `/dev/sr0` to the container, then run:
+```bash
+docker compose run --rm jellydisc --show "Smiling Friends" --season "2" --burn --drive "/dev/sr0"
+```
+*(Note: Docker Desktop for macOS/Windows does not support optical drive device passthrough. You must compile the ISO inside Docker and burn it on the host instead).*
+
 ### Project Structure
 
 ```
