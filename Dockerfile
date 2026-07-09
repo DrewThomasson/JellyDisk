@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 
-# Install system dependencies (including yt-dlp for trailer lookups)
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     dvdauthor \
@@ -8,7 +8,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wodim \
     genisoimage \
     fonts-dejavu-core \
-    yt-dlp \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
