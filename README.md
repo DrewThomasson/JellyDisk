@@ -6,6 +6,7 @@ An automated DVD authoring suite that connects to your Jellyfin server, download
 <img width="5712" height="4284" alt="IMG_2098" src="https://github.com/user-attachments/assets/0e3f5a7c-2b64-4552-bf19-54656681f7da" />
 <img width="5712" height="4284" alt="IMG_2095" src="https://github.com/user-attachments/assets/e26b6e79-5218-4838-be1e-cc80e9dda3c6" />
 <img width="5712" height="4284" alt="IMG_2094" src="https://github.com/user-attachments/assets/7e1df3df-df37-4800-a380-b93632dcd6ed" />
+
 [Smiling Friends_Season 1_Episode_Guide.pdf](https://github.com/user-attachments/files/29831463/Smiling.Friends_Season.1_Episode_Guide.pdf)
 
 
