@@ -39,7 +39,7 @@ An automated DVD authoring suite that connects to your Jellyfin server, download
 - Python 3.12+
 
 ### System Dependencies
-- `ffmpeg` - Media transcoding
+- `ffmpeg` - Media transcoding. **Note:** If you want subtitle support, your `ffmpeg` binary must be compiled with `--enable-libass` (which is included by default in standard packages installed via Ubuntu `apt` or macOS `brew`, but may be missing in minimal or custom builds like Linuxbrew's default recipe).
 - `dvdauthor` - DVD structure creation
 - `spumux` (part of dvdauthor) - Subtitle and interactive highlight rendering
 
