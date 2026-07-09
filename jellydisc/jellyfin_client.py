@@ -61,6 +61,9 @@ class Series:
     theme_song_url: Optional[str] = None
     seasons: list[Season] = field(default_factory=list)
     actors: list[str] = field(default_factory=list)
+    directors: list[str] = field(default_factory=list)
+    writers: list[str] = field(default_factory=list)
+    people_details: list[dict] = field(default_factory=list)
     type: str = "Series"
 
 

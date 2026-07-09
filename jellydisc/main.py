@@ -75,6 +75,45 @@ def sanitize_filename(name: str, max_length: int = 200) -> str:
     return safe[:max_length].strip()
 
 
+def parse_people_metadata(series, details):
+    """
+    Parse People metadata (Actors, Directors, Writers) and save onto the Series/Movie object.
+    """
+    people_list = details.get("People", [])
+    actors = []
+    directors = []
+    writers = []
+    people_details = []
+    
+    for person in people_list:
+        name = person.get("Name")
+        p_type = person.get("Type", "Unknown")
+        role = person.get("Role")
+        person_id = person.get("Id")
+        image_tag = person.get("PrimaryImageTag")
+        
+        if p_type == "Actor":
+            actors.append(f"{name} as {role}" if role else name)
+        elif p_type == "Director":
+            directors.append(name)
+        elif p_type == "Writer":
+            writers.append(name)
+            
+        people_details.append({
+            "name": name,
+            "type": p_type,
+            "role": role,
+            "id": person_id,
+            "primary_image_tag": image_tag,
+            "image_path": None
+        })
+        
+    series.actors = actors[:15]  # Support up to 15 actors
+    series.directors = directors
+    series.writers = writers
+    series.people_details = people_details[:30]  # Store top 30 people details
+
+
 # Configure CustomTkinter (only if available)
 if GUI_AVAILABLE:
     ctk.set_appearance_mode("dark")
@@ -911,16 +950,7 @@ class JellyDiscApp(_BaseClass):
                 # Fetch detailed metadata (actors & full overview) asynchronously
                 try:
                     details = self.jellyfin_client.get_item_details(series.id)
-                    actors = []
-                    for person in details.get("People", []):
-                        if person.get("Type") == "Actor":
-                            name = person.get("Name")
-                            role = person.get("Role")
-                            if role:
-                                actors.append(f"{name} as {role}")
-                            else:
-                                actors.append(name)
-                    series.actors = actors[:10]
+                    parse_people_metadata(series, details)
                     series.overview = details.get("Overview", "")
                 except Exception as ex:
                     logger.warning(f"Failed to fetch item details: {ex}")
@@ -1177,6 +1207,9 @@ class JellyDiscApp(_BaseClass):
             include_subtitles=include_subs,
             include_cast=True,
             actors=getattr(self.selected_series, "actors", []),
+            directors=getattr(self.selected_series, "directors", []),
+            writers=getattr(self.selected_series, "writers", []),
+            people_details=getattr(self.selected_series, "people_details", []),
             include_trailer=include_trailer
         )
         
@@ -1240,6 +1273,35 @@ class JellyDiscApp(_BaseClass):
                         ep_thumbs[ep.index_number] = t_path
                     except Exception as e:
                         self._log(f"⚠️ Failed to download thumbnail for E{ep.index_number}: {e}")
+
+        # Download people images (actors, directors, writers)
+        if self.jellyfin_client:
+            self._log("Downloading cast & crew images...")
+            people_dir = self.config.assets_dir / "people"
+            people_dir.mkdir(parents=True, exist_ok=True)
+            
+            target_people = []
+            actors_count = 0
+            for p in getattr(self.selected_series, "people_details", []):
+                if p["type"] == "Actor" and p["primary_image_tag"]:
+                    if actors_count < 6:
+                        target_people.append(p)
+                        actors_count += 1
+                elif p["type"] in ("Director", "Writer") and p["primary_image_tag"]:
+                    target_people.append(p)
+                    
+            for p in target_people:
+                p_id = p["id"]
+                img_tag = p["primary_image_tag"]
+                save_path = people_dir / f"{p_id}.jpg"
+                p["image_path"] = save_path
+                if not save_path.exists() or save_path.stat().st_size == 0:
+                    try:
+                        img_url = f"{self.jellyfin_client.server_url}/Items/{p_id}/Images/Primary?tag={img_tag}&maxWidth=200"
+                        self.jellyfin_client.download_image(img_url, save_path)
+                    except Exception as e:
+                        logger.warning(f"Failed to download image for {p['name']}: {e}")
+                        p["image_path"] = None
 
         # Check and download/transcode series trailer
         trailer_path = None
@@ -1492,21 +1554,23 @@ class JellyDiscApp(_BaseClass):
                 m_base_vid, m_hl, m_sel, m_btns, menu_builder.output_dir / "menu_main.mpg"
             )
             
-            # Step 3.5: Generate Cast & Info Menu (Optional)
-            menu_cast_vid = None
+            # Step 3.5: Generate Cast & Info Menus (Optional, paginated)
+            menu_cast_vids = []
             if menu_config.include_cast:
-                self._update_task(f"Disc {disc_num}: Generating Cast Menu...", 0.55)
-                self._log("Generating Cast & Info Menu...")
-                c_bg, c_hl, c_sel, c_btns = menu_builder.generate_cast_menu(
+                self._update_task(f"Disc {disc_num}: Generating Cast Menus...", 0.55)
+                self._log("Generating Cast & Info Menus...")
+                cast_pages = menu_builder.generate_cast_menus(
                     backdrop_path,
                     logo_path,
                     overview=self.selected_series.overview or "",
                     actors=menu_config.actors
                 )
-                c_base_vid = menu_builder.generate_menu_video(c_bg, "menu_cast_base.mpg")
-                menu_cast_vid = menu_builder.compile_interactive_menu(
-                    c_base_vid, c_hl, c_sel, c_btns, menu_builder.output_dir / "menu_cast.mpg"
-                )
+                for p_idx, (c_bg, c_hl, c_sel, c_btns) in enumerate(cast_pages):
+                    c_base_vid = menu_builder.generate_menu_video(c_bg, f"menu_cast_base_{p_idx+1}.mpg")
+                    c_vid = menu_builder.compile_interactive_menu(
+                        c_base_vid, c_hl, c_sel, c_btns, menu_builder.output_dir / f"menu_cast_{p_idx+1}.mpg"
+                    )
+                    menu_cast_vids.append(c_vid)
             
             # Step 4: Generate Episode Sub-Menus (paginated, 6 per page) - Only if we have multiple episodes
             menu_episode_vids = []
@@ -1546,7 +1610,7 @@ class JellyDiscApp(_BaseClass):
                 transcoded_files,
                 menu_main_vid,
                 menu_episode_vids,
-                menu_cast_path=menu_cast_vid,
+                menu_cast_paths=menu_cast_vids if menu_cast_vids else None,
                 menu_trailer_path=disc_trailer_path
             )
             
@@ -1636,7 +1700,9 @@ class JellyDiscApp(_BaseClass):
                         backdrop_path=backdrop_path,
                         logo_path=logo_path,
                         output_path=folio_pdf_path,
-                        actors=getattr(self.selected_series, "actors", [])
+                        actors=getattr(self.selected_series, "actors", []),
+                        directors=getattr(self.selected_series, "directors", []),
+                        writers=getattr(self.selected_series, "writers", [])
                     )
                     self._log(f"✓ Episode Guide Booklet PDF saved to: {folio_pdf_path}")
                     
@@ -1853,16 +1919,9 @@ def run_cli(args):
     series = shows[0]
     print(f"✓ Found media: {series.name} (ID: {series.id})")
     
-    # Detailed metadata
     try:
         details = client.get_item_details(series.id)
-        actors = []
-        for person in details.get("People", []):
-            if person.get("Type") == "Actor":
-                name = person.get("Name")
-                role = person.get("Role")
-                actors.append(f"{name} as {role}" if role else name)
-        series.actors = actors[:10]
+        parse_people_metadata(series, details)
         series.overview = details.get("Overview", "")
     except Exception as e:
         print(f"Warning: Failed to fetch metadata: {e}")
@@ -1993,6 +2052,36 @@ def run_cli(args):
             except Exception:
                 pass
                 
+    # Download people images (actors, directors, writers)
+    print("Downloading cast & crew images...")
+    people_dir = assets_dir / "people"
+    people_dir.mkdir(parents=True, exist_ok=True)
+    
+    # We will limit the image downloads to actors that will be shown in the menu (top 6 actors)
+    # plus any directors and writers.
+    target_people = []
+    actors_count = 0
+    for p in getattr(series, "people_details", []):
+        if p["type"] == "Actor" and p["primary_image_tag"]:
+            if actors_count < 6:
+                target_people.append(p)
+                actors_count += 1
+        elif p["type"] in ("Director", "Writer") and p["primary_image_tag"]:
+            target_people.append(p)
+            
+    for p in target_people:
+        p_id = p["id"]
+        img_tag = p["primary_image_tag"]
+        save_path = people_dir / f"{p_id}.jpg"
+        p["image_path"] = save_path
+        if not save_path.exists() or save_path.stat().st_size == 0:
+            try:
+                img_url = f"{client.server_url}/Items/{p_id}/Images/Primary?tag={img_tag}&maxWidth=200"
+                client.download_image(img_url, save_path)
+            except Exception as e:
+                print(f"  Warning: Failed to download image for {p['name']}: {e}")
+                p["image_path"] = None
+                
     # Download/Transcode trailer if requested
     trailer_path = None
     if include_trailer:
@@ -2086,6 +2175,9 @@ def run_cli(args):
         include_subtitles=include_subs,
         include_cast=True,
         actors=series.actors,
+        directors=series.directors,
+        writers=series.writers,
+        people_details=series.people_details,
         include_trailer=(trailer_path is not None)
     )
     
@@ -2155,13 +2247,15 @@ def run_cli(args):
         m_base_vid = menu_builder.generate_menu_video(m_bg, "menu_main_base.mpg", theme_path)
         menu_main_vid = menu_builder.compile_interactive_menu(m_base_vid, m_hl, m_sel, m_btns, current_staging_dir / "menu_main.mpg")
         
-        menu_cast_vid = None
+        menu_cast_vids = []
         if menu_config.include_cast:
-            c_bg, c_hl, c_sel, c_btns = menu_builder.generate_cast_menu(
+            cast_pages = menu_builder.generate_cast_menus(
                 backdrop_path, logo_path, overview=series.overview, actors=series.actors
             )
-            c_base_vid = menu_builder.generate_menu_video(c_bg, "menu_cast_base.mpg")
-            menu_cast_vid = menu_builder.compile_interactive_menu(c_base_vid, c_hl, c_sel, c_btns, current_staging_dir / "menu_cast.mpg")
+            for p_idx, (c_bg, c_hl, c_sel, c_btns) in enumerate(cast_pages):
+                c_base_vid = menu_builder.generate_menu_video(c_bg, f"menu_cast_base_{p_idx+1}.mpg")
+                c_vid = menu_builder.compile_interactive_menu(c_base_vid, c_hl, c_sel, c_btns, current_staging_dir / f"menu_cast_{p_idx+1}.mpg")
+                menu_cast_vids.append(c_vid)
             
         menu_episode_vids = []
         if show_ep_select:
@@ -2184,7 +2278,7 @@ def run_cli(args):
         # dvdauthor structure
         print("  Assembling DVD filesystem structure...")
         xml_path = menu_builder.generate_dvdauthor_xml(
-            transcoded_files, menu_main_vid, menu_episode_vids, menu_cast_path=menu_cast_vid, menu_trailer_path=disc_trailer
+            transcoded_files, menu_main_vid, menu_episode_vids, menu_cast_paths=menu_cast_vids if menu_cast_vids else None, menu_trailer_path=disc_trailer
         )
         dvd_dir = menu_builder.build_dvd_structure(xml_path)
         
@@ -2227,7 +2321,9 @@ def run_cli(args):
         backdrop_path=backdrop_path,
         logo_path=logo_path,
         output_path=folio_pdf,
-        actors=series.actors
+        actors=series.actors,
+        directors=series.directors,
+        writers=series.writers
     )
     print(f"✓ Episode Guide Booklet PDF saved to: {folio_pdf}")
     

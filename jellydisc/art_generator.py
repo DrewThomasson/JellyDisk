@@ -549,7 +549,9 @@ class ArtGenerator:
                                backdrop_path: Optional[Path],
                                logo_path: Optional[Path],
                                output_path: Path,
-                               actors: Optional[List[str]] = None) -> Path:
+                               actors: Optional[List[str]] = None,
+                               directors: Optional[List[str]] = None,
+                               writers: Optional[List[str]] = None) -> Path:
         """
         Generate a multi-page printable folio / insert booklet detailing each episode.
         Saves as a multi-page PDF at 300 DPI.
@@ -731,66 +733,131 @@ class ArtGenerator:
                 
             pages.append(page_img)
             
-        # --- LAST PAGE: CAST / CREDITS ---
-        credit_img = Image.new('RGB', (BK_WIDTH, BK_HEIGHT), bg_color)
-        cr_draw = ImageDraw.Draw(credit_img)
+        # --- LAST PAGE: CAST / CREDITS (DYNAMICALLY PAGINATED) ---
+        credit_pages = []
         
-        cr_draw.rectangle([(80, 80), (BK_WIDTH - 80, BK_HEIGHT - 80)], outline=(accent_color[0], accent_color[1], accent_color[2], 30), width=2)
+        current_img = Image.new('RGB', (BK_WIDTH, BK_HEIGHT), bg_color)
+        current_draw = ImageDraw.Draw(current_img)
+        current_draw.rectangle([(80, 80), (BK_WIDTH - 80, BK_HEIGHT - 80)], outline=(accent_color[0], accent_color[1], accent_color[2], 30), width=2)
         
         y_off = 180
         font_c_title = self._get_font(bold=True, size=46)
-        cr_draw.text((150, y_off), "CAST & CREW", fill=accent_color, font=font_c_title)
+        current_draw.text((150, y_off), "CAST & CREW", fill=accent_color, font=font_c_title)
         
         y_off += 65
-        cr_draw.line([(150, y_off), (BK_WIDTH - 150, y_off)], fill=(accent_color[0], accent_color[1], accent_color[2], 40), width=2)
+        current_draw.line([(150, y_off), (BK_WIDTH - 150, y_off)], fill=(accent_color[0], accent_color[1], accent_color[2], 40), width=2)
         
-        y_off += 60
+        y_off += 50
         font_c_item = self._get_font(bold=False, size=24)
+        font_c_label = self._get_font(bold=True, size=24)
+        
+        if directors:
+            current_draw.text((150, y_off), "DIRECTED BY:", fill=accent_color, font=font_c_label)
+            current_draw.text((360, y_off), ", ".join(directors), fill=(230, 230, 240), font=font_c_item)
+            y_off += 50
+            
+        if writers:
+            current_draw.text((150, y_off), "WRITTEN BY:", fill=accent_color, font=font_c_label)
+            current_draw.text((360, y_off), ", ".join(writers), fill=(230, 230, 240), font=font_c_item)
+            y_off += 50
+            
+        if directors or writers:
+            y_off += 20
+            current_draw.line([(150, y_off), (BK_WIDTH - 150, y_off)], fill=(accent_color[0], accent_color[1], accent_color[2], 25), width=1)
+            y_off += 40
         
         if actors:
+            current_draw.text((150, y_off), "STARRING:", fill=accent_color, font=font_c_label)
+            y_off += 50
             cr_col_w = (BK_WIDTH - 300) // 2
-            for a_idx, actor in enumerate(actors[:24]):
-                col = a_idx % 2
-                row = a_idx // 2
-                
-                ax = 150 + (col * cr_col_w)
-                ay = y_off + (row * 50)
-                
-                actor_txt = f"•  {actor}"
-                try:
-                    al = cr_draw.textlength(actor_txt, font=font_c_item)
-                except AttributeError:
-                    al = cr_draw.textsize(actor_txt, font=font_c_item)[0]
-                if al > cr_col_w - 30:
-                    while al > cr_col_w - 50 and len(actor_txt) > 5:
-                        actor_txt = actor_txt[:-2]
-                        try:
-                            al = cr_draw.textlength(actor_txt + "...", font=font_c_item)
-                        except AttributeError:
-                            al = cr_draw.textsize(actor_txt + "...", font=font_c_item)[0]
-                    actor_txt += "..."
-                cr_draw.text((ax, ay), actor_txt, fill=(230, 230, 240), font=font_c_item)
-        else:
-            cr_draw.text((150, y_off), "No cast information available.", fill=(180, 180, 180), font=font_c_item)
+            note_y = 1550
             
+            y_left = y_off
+            y_right = y_off
+            
+            for actor in actors:
+                if " as " in actor:
+                    name, role = actor.split(" as ", 1)
+                else:
+                    name, role = actor, ""
+                    
+                name_lines = self._wrap_text(name, font_c_item, cr_col_w - 50, current_draw)
+                role_lines = self._wrap_text(f"as {role}", font_c_item, cr_col_w - 70, current_draw) if role else []
+                
+                actor_h = len(name_lines) * 30 + len(role_lines) * 28 + 15
+                
+                # Check if drawing this actor will exceed note_y
+                target_y = min(y_left, y_right)
+                if target_y + actor_h >= note_y:
+                    credit_pages.append(current_img)
+                    
+                    # Initialize new credits page
+                    current_img = Image.new('RGB', (BK_WIDTH, BK_HEIGHT), bg_color)
+                    current_draw = ImageDraw.Draw(current_img)
+                    current_draw.rectangle([(80, 80), (BK_WIDTH - 80, BK_HEIGHT - 80)], outline=(accent_color[0], accent_color[1], accent_color[2], 30), width=2)
+                    
+                    y_off = 180
+                    current_draw.text((150, y_off), "CAST & CREW (CONT.)", fill=accent_color, font=font_c_title)
+                    y_off += 65
+                    current_draw.line([(150, y_off), (BK_WIDTH - 150, y_off)], fill=(accent_color[0], accent_color[1], accent_color[2], 40), width=2)
+                    y_off += 50
+                    
+                    current_draw.text((150, y_off), "STARRING (CONT.):", fill=accent_color, font=font_c_label)
+                    y_off += 50
+                    
+                    y_left = y_off
+                    y_right = y_off
+                    target_y = y_off
+                
+                # Draw on whichever column is shorter to balance them
+                if y_left <= y_right:
+                    ax = 150
+                    ay = y_left
+                    y_left += actor_h
+                else:
+                    ax = 150 + cr_col_w
+                    ay = y_right
+                    y_right += actor_h
+                    
+                # Draw name lines (prefix first line with bullet)
+                for idx, n_line in enumerate(name_lines):
+                    prefix = "•  " if idx == 0 else "   "
+                    current_draw.text((ax, ay), f"{prefix}{n_line}", fill=(230, 230, 240), font=font_c_item)
+                    ay += 30
+                    
+                # Draw role lines (slightly indented and dimmer color)
+                for r_line in role_lines:
+                    current_draw.text((ax, ay), f"   {r_line}", fill=(180, 180, 190), font=font_c_item)
+                    ay += 28
+        else:
+            if not directors and not writers:
+                current_draw.text((150, y_off), "No cast information available.", fill=(180, 180, 180), font=font_c_item)
+                
+        # Append the final credits page
+        credit_pages.append(current_img)
+        
+        # Draw the footer notes only on the LAST credit page
+        last_page = credit_pages[-1]
+        last_draw = ImageDraw.Draw(last_page)
+        
         note_y = 1600
-        cr_draw.line([(150, note_y), (BK_WIDTH - 150, note_y)], fill=(accent_color[0], accent_color[1], accent_color[2], 25), width=1)
+        last_draw.line([(150, note_y), (BK_WIDTH - 150, note_y)], fill=(accent_color[0], accent_color[1], accent_color[2], 25), width=1)
         
         note_str = "This season was compiled, transcoded, and authored using the JellyDisc DVD Authoring Suite. All titles, episode information, and cover artwork are sourced directly from your Jellyfin server library."
         font_note = self._get_font(bold=False, size=20)
-        note_wrapped = self._wrap_text(note_str, font_note, BK_WIDTH - 300, cr_draw)
+        note_wrapped = self._wrap_text(note_str, font_note, BK_WIDTH - 300, last_draw)
         
         ny = note_y + 40
         for line in note_wrapped:
             try:
-                nw = cr_draw.textlength(line, font=font_note)
+                nw = last_draw.textlength(line, font=font_note)
             except AttributeError:
-                nw = cr_draw.textsize(line, font=font_note)[0]
+                nw = last_draw.textsize(line, font=font_note)[0]
             nx = (BK_WIDTH - int(nw)) // 2
-            cr_draw.text((nx, ny), line, fill=(140, 140, 150), font=font_note)
+            last_draw.text((nx, ny), line, fill=(140, 140, 150), font=font_note)
             ny += 30
             
-        pages.append(credit_img)
+        pages.extend(credit_pages)
         
         final_pdf_path = output_path
         rgb_pages = [p.convert('RGB') for p in pages]

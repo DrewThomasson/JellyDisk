@@ -35,6 +35,9 @@ class MenuConfig:
     include_subtitles: bool = True
     include_cast: bool = True
     actors: list[str] = field(default_factory=list)
+    directors: list[str] = field(default_factory=list)
+    writers: list[str] = field(default_factory=list)
+    people_details: list[dict] = field(default_factory=list)
     include_trailer: bool = False
     
     # Grid layout settings in 16:9 design space (853x480)
@@ -401,92 +404,198 @@ class MenuBuilder:
         coded_bounds = [self._scale_box_to_coded(box) for box in buttons_design]
         return bg_path, hl_path, sel_path, coded_bounds
 
-    def generate_cast_menu(
+    def generate_cast_menus(
         self,
         backdrop_path: Optional[Path] = None,
         logo_path: Optional[Path] = None,
         overview: str = "",
         actors: list[str] = None
-    ) -> tuple[Path, Path, Path, list[tuple[int, int, int, int]]]:
+    ) -> list[tuple[Path, Path, Path, list[tuple[int, int, int, int]]]]:
         """
-        Generate the Cast & Show Info Menu background and highlights.
+        Generate paginated Cast & Show Info Menu backgrounds and highlights.
         """
-        bg_image = self._load_backdrop(backdrop_path)
-        draw = ImageDraw.Draw(bg_image)
-        bg_image = self._apply_style(bg_image)
-        draw = ImageDraw.Draw(bg_image)
-        
-        hl_image = Image.new('RGB', (self.DESIGN_WIDTH, self.DESIGN_HEIGHT), (0, 0, 0))
-        sel_image = Image.new('RGB', (self.DESIGN_WIDTH, self.DESIGN_HEIGHT), (0, 0, 0))
-        hl_draw = ImageDraw.Draw(hl_image)
-        sel_draw = ImageDraw.Draw(sel_image)
-        
-        header_end_y = self._draw_menu_header(bg_image, draw, logo_path)
-        
-        # Cast Title Subtext
-        font_sub = self._get_font(20)
-        sub_text = "CAST & SHOW INFO"
-        sub_bbox = draw.textbbox((0, 0), sub_text, font=font_sub)
-        sub_x = (self.DESIGN_WIDTH - (sub_bbox[2] - sub_bbox[0])) // 2
-        draw.text((sub_x, header_end_y + 5), sub_text, fill=self.config.subtitle_color, font=font_sub)
-        
-        content_y = header_end_y + 50
-        
-        # Draw Summary column (Left side)
-        summary_title_font = self._get_font(16)
-        draw.text((self.SAFE_MARGIN_X, content_y), "SHOW SUMMARY", fill=self.config.subtitle_color, font=summary_title_font)
-        
-        summary_font = self._get_font(11)
-        summary_text = overview or "No show summary available."
-        # Wrap summary text (approx 45 chars per line)
-        wrapped_summary = textwrap.fill(summary_text, width=45)
-        # Limit lines to prevent vertical overflow
-        lines = wrapped_summary.split("\n")
-        if len(lines) > 13:
-            wrapped_summary = "\n".join(lines[:12]) + "\n..."
-        draw.text((self.SAFE_MARGIN_X, content_y + 25), wrapped_summary, fill=self.config.text_color, font=summary_font)
-        
-        # Draw Cast column (Right side)
-        cast_title_x = 480
-        draw.text((cast_title_x, content_y), "STARRING CAST", fill=self.config.subtitle_color, font=summary_title_font)
-        
-        cast_font = self._get_font(14)
-        actors_list = actors or self.config.actors
-        if not actors_list:
-            actors_list = ["Cast details not available."]
+        # Extract actor details from people_details
+        actors_details = [p for p in self.config.people_details if p["type"] == "Actor"]
+        if not actors_details:
+            actors_details = []
+            for act_str in (actors or self.config.actors):
+                if " as " in act_str:
+                    n, r = act_str.split(" as ", 1)
+                else:
+                    n, r = act_str, ""
+                actors_details.append({
+                    "name": n,
+                    "role": r,
+                    "image_path": None
+                })
+                
+        # Split into pages of 6 actors each
+        page_size = 6
+        pages_actors = [actors_details[i:i + page_size] for i in range(0, len(actors_details), page_size)]
+        if not pages_actors:
+            pages_actors = [[]]
             
-        cast_y = content_y + 25
-        for actor in actors_list[:7]:  # Limit to 7 actors to fit vertically
-            # Truncate long role descriptions to fit column
-            if len(actor) > 35:
-                actor = actor[:32] + "..."
-            draw.text((cast_title_x, cast_y), f"• {actor}", fill=self.config.text_color, font=cast_font)
-            cast_y += 26
+        generated_pages = []
+        
+        for p_idx, page_acts in enumerate(pages_actors):
+            bg_image = self._load_backdrop(backdrop_path)
+            draw = ImageDraw.Draw(bg_image)
+            bg_image = self._apply_style(bg_image)
+            draw = ImageDraw.Draw(bg_image)
             
-        # Draw Back Button at the bottom
-        nav_y = 435
-        btn_font = self._get_font(18)
-        mask_draws = [hl_draw, sel_draw]
-        buttons_design = []
-        
-        box_back = self._draw_text_button(draw, "BACK TO MAIN", self.DESIGN_WIDTH // 2, nav_y, btn_font, self.config.subtitle_color, mask_draws)
-        buttons_design.append(box_back)
-        
-        # Downscale and save
-        final_bg = bg_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.LANCZOS)
-        final_hl = hl_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.NEAREST)
-        final_sel = sel_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.NEAREST)
-        
-        bg_path = self.output_dir / "menu_cast_bg.png"
-        hl_path = self.output_dir / "menu_cast_highlight.png"
-        sel_path = self.output_dir / "menu_cast_select.png"
-        
-        final_bg.save(bg_path, "PNG")
-        final_hl.save(hl_path, "PNG")
-        final_sel.save(sel_path, "PNG")
-        
-        coded_bounds = [self._scale_box_to_coded(box) for box in buttons_design]
-        return bg_path, hl_path, sel_path, coded_bounds
+            hl_image = Image.new('RGB', (self.DESIGN_WIDTH, self.DESIGN_HEIGHT), (0, 0, 0))
+            sel_image = Image.new('RGB', (self.DESIGN_WIDTH, self.DESIGN_HEIGHT), (0, 0, 0))
+            hl_draw = ImageDraw.Draw(hl_image)
+            sel_draw = ImageDraw.Draw(sel_image)
+            
+            header_end_y = self._draw_menu_header(bg_image, draw, logo_path)
+            
+            # Subtitle indicating page index
+            font_sub = self._get_font(20)
+            sub_text = f"CAST & SHOW INFO (PAGE {p_idx+1}/{len(pages_actors)})" if len(pages_actors) > 1 else "CAST & SHOW INFO"
+            sub_bbox = draw.textbbox((0, 0), sub_text, font=font_sub)
+            sub_x = (self.DESIGN_WIDTH - (sub_bbox[2] - sub_bbox[0])) // 2
+            draw.text((sub_x, header_end_y + 5), sub_text, fill=self.config.subtitle_color, font=font_sub)
+            
+            content_y = header_end_y + 50
+            
+            # Left summary column (only on page 1 for a clean layout, or always if desired)
+            summary_title_font = self._get_font(16)
+            draw.text((self.SAFE_MARGIN_X, content_y), "SHOW SUMMARY", fill=self.config.subtitle_color, font=summary_title_font)
+            
+            summary_font = self._get_font(11)
+            summary_text = overview or "No show summary available."
+            wrapped_summary = textwrap.fill(summary_text, width=45)
+            lines = wrapped_summary.split("\n")
+            if len(lines) > 13:
+                wrapped_summary = "\n".join(lines[:12]) + "\n..."
+            draw.text((self.SAFE_MARGIN_X, content_y + 25), wrapped_summary, fill=self.config.text_color, font=summary_font)
+            
+            # Crew layout (Left side)
+            crew_y = content_y + 25 + (min(len(lines), 12) * 14) + 15
+            if self.config.directors or self.config.writers:
+                crew_font_title = self._get_font(13)
+                crew_font_text = self._get_font(11)
+                
+                if self.config.directors:
+                    draw.text((self.SAFE_MARGIN_X, crew_y), "DIRECTED BY", fill=self.config.subtitle_color, font=crew_font_title)
+                    directors_text = ", ".join(self.config.directors[:3])
+                    draw.text((self.SAFE_MARGIN_X, crew_y + 16), directors_text, fill=self.config.text_color, font=crew_font_text)
+                    crew_y += 38
+                    
+                if self.config.writers:
+                    draw.text((self.SAFE_MARGIN_X, crew_y), "WRITTEN BY", fill=self.config.subtitle_color, font=crew_font_title)
+                    writers_text = ", ".join(self.config.writers[:3])
+                    draw.text((self.SAFE_MARGIN_X, crew_y + 16), writers_text, fill=self.config.text_color, font=crew_font_text)
+            
+            # Center the STARRING CAST header over the Starring Cast columns
+            cast_title_text = "STARRING CAST"
+            cast_title_bbox = draw.textbbox((0, 0), cast_title_text, font=summary_title_font)
+            cast_title_w = cast_title_bbox[2] - cast_title_bbox[0]
+            cast_title_x = 415 + (410 - cast_title_w) // 2
+            draw.text((cast_title_x, content_y), cast_title_text, fill=self.config.subtitle_color, font=summary_title_font)
+            
+            # Re-aligned grid positions: shifted left to fit within safe bounds
+            grid_x = [415, 630]
+            grid_y = [content_y + 25, content_y + 90, content_y + 155]
+            
+            actor_name_font = self._get_font(12)
+            actor_role_font = self._get_font(10)
+            initials_font = self._get_font(14)
+            
+            for idx, act in enumerate(page_acts):
+                col = idx % 2
+                row = idx // 2
+                ax = grid_x[col]
+                ay = grid_y[row]
+                
+                # Draw Circular Headshot (slightly smaller diameter for better spacing/fit)
+                headshot_size = 42
+                img_path = act.get("image_path")
+                has_pasted = False
+                
+                if img_path and Path(img_path).exists():
+                    try:
+                        actor_img = Image.open(img_path).convert("RGBA")
+                        actor_img = actor_img.resize((headshot_size, headshot_size), Image.Resampling.LANCZOS)
+                        
+                        mask = Image.new("L", (headshot_size, headshot_size), 0)
+                        mask_draw = ImageDraw.Draw(mask)
+                        mask_draw.ellipse((0, 0, headshot_size - 1, headshot_size - 1), fill=255)
+                        
+                        bg_image.paste(actor_img, (ax, ay), mask)
+                        has_pasted = True
+                    except Exception as ex:
+                        logger.warning(f"Failed to draw actor headshot image: {ex}")
+                        
+                if not has_pasted:
+                    # Draw placeholder circle with initials
+                    names = act["name"].split()
+                    initials = "".join([n[0] for n in names[:2]]).upper() if names else "?"
+                    circle_color = (60, 60, 80, 255)
+                    draw.ellipse((ax, ay, ax + headshot_size - 1, ay + headshot_size - 1), fill=circle_color)
+                    
+                    ibox = draw.textbbox((0, 0), initials, font=initials_font)
+                    ix = ax + (headshot_size - (ibox[2] - ibox[0])) // 2
+                    iy = ay + (headshot_size - (ibox[3] - ibox[1])) // 2 - 2
+                    draw.text((ix, iy), initials, fill=(200, 200, 220, 255), font=initials_font)
+                    
+                # Draw Actor Name and Role next to it
+                tx = ax + 52
+                ty = ay + 3
+                a_name = act["name"]
+                
+                # Column-specific truncation limits to prevent right-edge clipping
+                max_name_len = 22 if col == 0 else 18
+                max_role_len = 24 if col == 0 else 20
+                
+                if len(a_name) > max_name_len:
+                    a_name = a_name[:max_name_len - 2] + "..."
+                draw.text((tx, ty), a_name, fill=self.config.text_color, font=actor_name_font)
+                
+                role_text = act.get("role") or ""
+                if role_text:
+                    if len(role_text) > max_role_len:
+                        role_text = role_text[:max_role_len - 2] + "..."
+                    draw.text((tx, ty + 16), f"as {role_text}", fill=self.config.subtitle_color, font=actor_role_font)
+                
+            # Draw Navigation Buttons at the bottom
+            nav_y = 435
+            btn_font = self._get_font(18)
+            mask_draws = [hl_draw, sel_draw]
+            buttons_design = []
+            
+            # Back Button
+            box_back = self._draw_text_button(draw, "BACK TO MAIN", self.DESIGN_WIDTH // 2 if len(pages_actors) == 1 else 426, nav_y, btn_font, self.config.subtitle_color, mask_draws)
+            buttons_design.append(box_back)
+            
+            # Prev Page Button
+            if p_idx > 0:
+                box_prev = self._draw_text_button(draw, "PREV PAGE", 220, nav_y, btn_font, self.config.subtitle_color, mask_draws)
+                buttons_design.append(box_prev)
+                
+            # Next Page Button
+            if p_idx < len(pages_actors) - 1:
+                box_next = self._draw_text_button(draw, "NEXT PAGE", 632, nav_y, btn_font, self.config.subtitle_color, mask_draws)
+                buttons_design.append(box_next)
+                
+            # Downscale and save
+            final_bg = bg_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.LANCZOS)
+            final_hl = hl_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.NEAREST)
+            final_sel = sel_image.resize((self.MENU_WIDTH, self.MENU_HEIGHT), Image.Resampling.NEAREST)
+            
+            bg_path = self.output_dir / f"menu_cast_bg_{p_idx+1}.png"
+            hl_path = self.output_dir / f"menu_cast_hl_{p_idx+1}.png"
+            sel_path = self.output_dir / f"menu_cast_sel_{p_idx+1}.png"
+            
+            final_bg.save(bg_path, "PNG")
+            final_hl.save(hl_path, "PNG")
+            final_sel.save(sel_path, "PNG")
+            
+            coded_bounds = [self._scale_box_to_coded(box) for box in buttons_design]
+            generated_pages.append((bg_path, hl_path, sel_path, coded_bounds))
+            
+        return generated_pages
 
     def generate_episode_menu(
         self,
@@ -736,7 +845,7 @@ class MenuBuilder:
         video_files: list[Path],
         menu_main_path: Path,
         menu_episode_paths: list[Path],
-        menu_cast_path: Optional[Path] = None,
+        menu_cast_paths: Optional[list[Path]] = None,
         menu_trailer_path: Optional[Path] = None,
         output_path: Optional[Path] = None
     ) -> Path:
@@ -751,15 +860,16 @@ class MenuBuilder:
         
         # PGC indexes:
         # PGC 1: Main Menu (Menu 1)
-        # If cast menu exists:
-        #   PGC 2: Cast Menu (Menu 2)
-        #   PGC 3+: Episode Menu Pages
+        # If cast menus exist:
+        #   PGC 2 to 2 + len(menu_cast_paths) - 1: Cast Menu Pages
+        #   PGC (2 + len(menu_cast_paths))+: Episode Menu Pages
         # Else:
         #   PGC 2+: Episode Menu Pages
         
-        has_cast = menu_cast_path is not None
+        has_cast = menu_cast_paths is not None and len(menu_cast_paths) > 0
+        num_cast_menus = len(menu_cast_paths) if has_cast else 0
         has_trailer = menu_trailer_path is not None
-        ep_start_menu_num = 3 if has_cast else 2
+        ep_start_menu_num = 2 + num_cast_menus
         
         total_pages = len(menu_episode_paths)
         
@@ -808,13 +918,33 @@ class MenuBuilder:
 {main_buttons}
       </pgc>''')
  
-        # 2. Cast Menu PGC (PGC 2) - Optional
+        # 2. Cast Menu PGCs (PGC 2 to 2 + num_cast_menus - 1)
         if has_cast:
-            menu_pgcs.append(f'''      <!-- Menu 2: Cast & Info Menu -->
+            for c_idx, cast_path in enumerate(menu_cast_paths):
+                c_menu_num = 2 + c_idx
+                buttons = []
+                
+                # Button 1: Back to Main Menu
+                buttons.append(f'        <button name="button1"> jump menu 1; </button>')
+                c_btn_idx = 2
+                
+                # Button 2: Prev Page
+                if c_idx > 0:
+                    prev_c_num = c_menu_num - 1
+                    buttons.append(f'        <button name="button{c_btn_idx}"> jump menu {prev_c_num}; </button>')
+                    c_btn_idx += 1
+                    
+                # Button 3: Next Page
+                if c_idx < len(menu_cast_paths) - 1:
+                    next_c_num = c_menu_num + 1
+                    buttons.append(f'        <button name="button{c_btn_idx}"> jump menu {next_c_num}; </button>')
+                    c_btn_idx += 1
+                    
+                menu_pgcs.append(f'''      <!-- Menu {c_menu_num}: Cast & Info Menu Page {c_idx+1} -->
       <pgc>
         <pre> g2 = 0; </pre>
-        <vob file="{menu_cast_path}" pause="inf" />
-        <button name="button1"> jump menu 1; </button>
+        <vob file="{cast_path}" pause="inf" />
+{chr(10).join(buttons)}
       </pgc>''')
  
         # 3. Episode Selection Menus
