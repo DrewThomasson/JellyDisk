@@ -20,6 +20,7 @@ An automated DVD authoring suite that connects to your Jellyfin server, download
 - **Cross-Platform Burner**: Integrated burner utility using `hdiutil` (macOS), `growisofs`/`wodim` (Linux), and `ImgBurn` (Windows).
 - **Apple Silicon Optimized**: Automatically bypasses macOS `Inappropriate ioctl` USB power drive bugs on Apple Silicon (M-series) Macs during burning.
 - **ISO Export**: Generate clean DVD ISO files for previewing or storage.
+- **Printable Cover Art & Booklets**: Automatically generate high-resolution, print-ready PDF covers (front, spine, back) and multi-page episode guides based on Jellyfin metadata.
 
 ## Requirements
 

@@ -51,6 +51,7 @@ from .burner import (
     Burner,
     check_burner_dependencies
 )
+from .art_generator import ArtGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -389,6 +390,24 @@ class JellyDiscApp(_BaseClass):
             width=200
         )
         speed_dropdown.grid(row=5, column=1, sticky="w", padx=10, pady=10)
+        
+        # Generate Printable Cover
+        self.cover_art_var = ctk.BooleanVar(value=True)
+        cover_art_check = ctk.CTkCheckBox(
+            settings_frame,
+            text="Generate Printable DVD Cover (PDF)",
+            variable=self.cover_art_var
+        )
+        cover_art_check.grid(row=6, column=1, sticky="w", padx=10, pady=10)
+
+        # Generate Printable Folio
+        self.folio_var = ctk.BooleanVar(value=True)
+        folio_check = ctk.CTkCheckBox(
+            settings_frame,
+            text="Generate Episode Info Booklet (PDF)",
+            variable=self.folio_var
+        )
+        folio_check.grid(row=7, column=1, sticky="w", padx=10, pady=10)
         
         # Summary frame
         self.config_summary = ctk.CTkFrame(frame)
@@ -1178,6 +1197,16 @@ class JellyDiscApp(_BaseClass):
                 self._log(f"⚠️ Failed to download logo: {e}")
                 logo_path = None
 
+        season_poster_path = None
+        if self.jellyfin_client and self.selected_season and self.selected_season.primary_image_url:
+            self._log("Downloading season poster...")
+            try:
+                season_poster_path = self.config.assets_dir / "season_poster.jpg"
+                self.jellyfin_client.download_image(self.selected_season.primary_image_url, season_poster_path)
+            except Exception as e:
+                self._log(f"⚠️ Failed to download season poster: {e}")
+                season_poster_path = None
+
         theme_path = None
         if self.jellyfin_client:
             try:
@@ -1538,6 +1567,52 @@ class JellyDiscApp(_BaseClass):
                 self._log(f"⚠️ ISO creation failed: {e}")
             
             self._update_overall(disc_num / len(self.disc_plans))
+        
+        # Generate printable cover art and/or booklet guide if selected
+        generate_cover = self.cover_art_var.get()
+        generate_folio = self.folio_var.get()
+        
+        if (generate_cover or generate_folio) and self.selected_series and self.selected_season:
+            self._update_task("Generating printable artwork PDFs...", 0.9)
+            self._log("\n=== Generating Printable Artwork ===")
+            try:
+                art_gen = ArtGenerator(self.config.assets_dir)
+                
+                # Make sure filenames are safe
+                base_name = sanitize_filename(f"{self.selected_series.name}_{self.selected_season.name}")
+                
+                if generate_cover:
+                    cover_pdf_path = self.config.output_dir / f"{base_name}_DVD_Cover.pdf"
+                    self._log("Generating DVD Box Cover Art PDF...")
+                    art_gen.generate_dvd_wrap(
+                        series_name=self.selected_series.name,
+                        season_name=self.selected_season.name,
+                        overview=self.selected_season.overview or self.selected_series.overview or "",
+                        episodes=self.selected_season.episodes,
+                        backdrop_path=backdrop_path,
+                        logo_path=logo_path,
+                        season_poster_path=season_poster_path,
+                        output_path=cover_pdf_path
+                    )
+                    self._log(f"✓ DVD Cover PDF saved to: {cover_pdf_path}")
+                    
+                if generate_folio:
+                    folio_pdf_path = self.config.output_dir / f"{base_name}_Episode_Guide.pdf"
+                    self._log("Generating Episode Guide Booklet PDF...")
+                    art_gen.generate_episode_folio(
+                        series_name=self.selected_series.name,
+                        season_name=self.selected_season.name,
+                        overview=self.selected_season.overview or self.selected_series.overview or "",
+                        episodes=self.selected_season.episodes,
+                        backdrop_path=backdrop_path,
+                        logo_path=logo_path,
+                        output_path=folio_pdf_path,
+                        actors=getattr(self.selected_series, "actors", [])
+                    )
+                    self._log(f"✓ Episode Guide Booklet PDF saved to: {folio_pdf_path}")
+                    
+            except Exception as e:
+                self._log(f"⚠️ Printable artwork generation failed: {e}")
         
         # Step 7: Burn if requested
         if burn and iso_files:
