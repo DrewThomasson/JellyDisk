@@ -1561,25 +1561,19 @@ class JellyDiscApp(_BaseClass):
                     import re
                     try:
                         self._log(f"Downloading subtitles for E{job.episode_index}...")
-                        sub_tracks = self.jellyfin_client.get_subtitle_tracks(job.item_id)
-                        # Filter for English or default to first track
-                        eng_tracks = [t for t in sub_tracks if t.get('Language') == 'eng']
-                        selected_track = eng_tracks[0] if eng_tracks else (sub_tracks[0] if sub_tracks else None)
-                        
-                        if selected_track:
-                            sub_format = selected_track.get('Codec', 'srt')
-                            sub_data = self.jellyfin_client.download_subtitle(job.item_id, selected_track['Index'], sub_format)
-                            
-                            # Clean WebVTT tags if necessary
-                            if sub_format == 'vtt':
-                                sub_data = re.sub(r'WEBVTT\r?\n\r?\n', '', sub_data)
-                                sub_data = re.sub(r'(\d\d:\d\d:\d\d)\.(\d\d\d)', r'\1,\2', sub_data)
-                                
-                            with open(srt_path, 'w', encoding='utf-8') as sf:
-                                sf.write(sub_data)
-                            self._log(f"✓ Subtitles downloaded to {srt_path.name}")
+                        match = re.search(r'/Items/([^/]+)/Download', job.input_path)
+                        if match:
+                            ep_id = match.group(1)
+                            if not srt_path.exists():
+                                downloaded = download_episode_subtitles(self.jellyfin_client, ep_id, srt_path)
+                                if downloaded:
+                                    self._log(f"✓ Subtitles downloaded to {srt_path.name}")
+                                else:
+                                    self._log("No subtitle tracks found or download failed.")
+                            else:
+                                self._log(f"✓ Subtitles already cached at {srt_path.name}")
                         else:
-                            self._log("No subtitle tracks found.")
+                            self._log("⚠️ Could not extract episode ID from input path.")
                     except Exception as e:
                         self._log(f"⚠️ Failed to download subtitles: {e}")
                 
