@@ -2504,6 +2504,13 @@ def run_cli(args):
             print("❌ Error: Burning requested, but no burning tool is available on this system.")
             print(burner_info["instructions"])
             sys.exit(1)
+            
+        # Verify drive presence
+        if not drive_path:
+            detected = burner.detect_drives()
+            if not detected:
+                print("❌ Error: Burning requested, but no optical drives were detected on this system.")
+                sys.exit(1)
         
     print("✓ All dependencies verified.")
     
