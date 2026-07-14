@@ -474,8 +474,33 @@ class Transcoder:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
+        # Get input media info to determine audio layout
+        media_info = self.get_media_info(input_path)
+        
         # Get input duration for progress tracking
-        duration = self.get_media_duration(input_path)
+        duration = 0.0
+        try:
+            duration = float(media_info.get("format", {}).get("duration", 0.0))
+        except (ValueError, TypeError):
+            pass
+            
+        if not duration:
+            duration = self.get_media_duration(input_path)
+            
+        audio_channels = 2
+        for stream in media_info.get("streams", []):
+            if stream.get("codec_type") == "audio":
+                try:
+                    audio_channels = int(stream.get("channels", 2))
+                    break
+                except (ValueError, TypeError):
+                    pass
+                    
+        # Check if we need to downmix multi-channel audio to stereo
+        audio_filters = []
+        if self.audio_settings.channels == 2 and audio_channels > 2:
+            logger.info(f"Input has {audio_channels} audio channels. Applying Dolby Pro Logic II stereo downmix resampler filter.")
+            audio_filters.append("aresample=matrix_encoding=dplii")
         
         # Calculate bitrate if not provided
         if video_bitrate is None:
@@ -521,6 +546,10 @@ class Transcoder:
             "-y",  # Overwrite output
             "-i", input_path,
             
+            # Explicit stream mapping: map first video and first audio stream
+            "-map", "0:v:0",
+            "-map", "0:a:0?",
+            
             # Video settings for DVD-compliant MPEG-2
             "-c:v", "mpeg2video",
             "-b:v", str(video_bitrate),
@@ -538,7 +567,12 @@ class Transcoder:
             "-b:a", self.audio_settings.bitrate,
             "-ar", str(self.audio_settings.sample_rate),
             "-ac", str(self.audio_settings.channels),
+        ]
+        
+        if audio_filters:
+            cmd.extend(["-af", ",".join(audio_filters)])
             
+        cmd.extend([
             # Output format - use dvd for DVD VOB compatibility
             "-f", "dvd",
             
@@ -547,7 +581,7 @@ class Transcoder:
             "-nostats",
             
             str(output_path)
-        ]
+        ])
         
         logger.info(f"Transcoding: {input_path} -> {output_path}")
         logger.debug(f"Command: {' '.join(cmd)}")
