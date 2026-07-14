@@ -1393,6 +1393,15 @@ class JellyDiscApp(_BaseClass):
             self._log(f"❌ {error_msg}")
             raise RuntimeError(error_msg)
             
+        # Check burning tools if burning is requested
+        if burn:
+            if not burner.is_burner_available():
+                burner_info = burner.get_burner_info()
+                error_msg = "Burning requested, but no burning tool is available on this system.\n"
+                error_msg += burner_info["instructions"]
+                self._log(f"❌ {error_msg}")
+                raise RuntimeError(error_msg)
+            
         self._log("✓ All dependencies verified.")
         
         # --- Download assets from Jellyfin ---
@@ -2428,6 +2437,7 @@ def run_cli(args):
             sys.exit(0)
     
     transcoder = Transcoder(current_staging_dir, VideoSettings(video_standard), dvd_capacity_mb=dvd_capacity_mb)
+    burner = Burner(output_dir)
     
     # Check dependencies upfront in CLI
     print("Checking system dependencies...")
@@ -2486,6 +2496,14 @@ def run_cli(args):
     if not has_iso_tool:
         print("❌ Error: No ISO creation tool found (need mkisofs, genisoimage, or python pycdlib).")
         sys.exit(1)
+        
+    # Check burning tools if burning is requested
+    if burn_disc:
+        if not burner.is_burner_available():
+            burner_info = burner.get_burner_info()
+            print("❌ Error: Burning requested, but no burning tool is available on this system.")
+            print(burner_info["instructions"])
+            sys.exit(1)
         
     print("✓ All dependencies verified.")
     
@@ -2689,7 +2707,6 @@ def run_cli(args):
     )
     
     menu_builder = MenuBuilder(current_staging_dir, menu_config)
-    burner = Burner(output_dir)
     iso_files = []
     
     for disc_plan in disc_plans:
