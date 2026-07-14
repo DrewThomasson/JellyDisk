@@ -242,7 +242,7 @@ class Transcoder:
                     self._ffprobe_path,
                     "-v", "error",
                     "-show_entries", 
-                    "format=duration,size,bit_rate:stream=codec_type,codec_name,width,height,channels,sample_rate",
+                    "format=duration,size,bit_rate:stream=codec_type,codec_name,width,height,channels,sample_rate,disposition,tags",
                     "-of", "json",
                     input_path
                 ],
@@ -474,8 +474,70 @@ class Transcoder:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
+        # Get input media info to determine audio layout
+        media_info = self.get_media_info(input_path)
+        
         # Get input duration for progress tracking
-        duration = self.get_media_duration(input_path)
+        duration = 0.0
+        try:
+            duration = float(media_info.get("format", {}).get("duration", 0.0))
+        except (ValueError, TypeError):
+            pass
+            
+        if not duration:
+            duration = self.get_media_duration(input_path)
+            
+        # Parse all audio streams to select the best main audio track
+        audio_streams = []
+        for stream in media_info.get("streams", []):
+            if stream.get("codec_type") == "audio":
+                disposition = stream.get("disposition", {})
+                tags = stream.get("tags", {})
+                
+                is_default = int(disposition.get("default", 0)) == 1
+                
+                title = tags.get("title", "").lower()
+                is_commentary = (
+                    int(disposition.get("comment", 0)) == 1 or
+                    "commentary" in title or
+                    "comment" in title or
+                    "description" in title or
+                    "sdh" in title
+                )
+                
+                audio_streams.append({
+                    "index": len(audio_streams),
+                    "channels": int(stream.get("channels", 2)),
+                    "is_default": is_default,
+                    "is_commentary": is_commentary
+                })
+                
+        best_audio_index = 0
+        audio_channels = 2
+        
+        if audio_streams:
+            non_commentary = [s for s in audio_streams if not s["is_commentary"]]
+            candidates = non_commentary if non_commentary else audio_streams
+            
+            default_streams = [s for s in candidates if s["is_default"]]
+            if default_streams:
+                best_stream = default_streams[0]
+            else:
+                candidates.sort(key=lambda s: s["channels"], reverse=True)
+                best_stream = candidates[0]
+                
+            best_audio_index = best_stream["index"]
+            audio_channels = best_stream["channels"]
+            logger.info(f"Selected audio stream index {best_audio_index} (channels: {audio_channels}) as the best audio track.")
+            
+        # Check if we need to downmix multi-channel audio to stereo or apply sync
+        audio_filters = []
+        if self.audio_settings.channels == 2 and audio_channels > 2:
+            logger.info(f"Input has {audio_channels} audio channels. Applying Dolby Pro Logic II stereo downmix resampler filter with async=1.")
+            audio_filters.append("aresample=async=1:matrix_encoding=dplii")
+        else:
+            # Always apply async=1 resampler to handle timestamp corruption/gaps
+            audio_filters.append("aresample=async=1")
         
         # Calculate bitrate if not provided
         if video_bitrate is None:
@@ -519,7 +581,15 @@ class Transcoder:
         cmd = [
             self._ffmpeg_path,
             "-y",  # Overwrite output
+            
+            # Input flags to regenerate missing/broken timestamps
+            "-fflags", "+genpts",
+            
             "-i", input_path,
+            
+            # Explicit stream mapping: map first video and best audio stream
+            "-map", "0:v:0",
+            "-map", f"0:a:{best_audio_index}?",
             
             # Video settings for DVD-compliant MPEG-2
             "-c:v", "mpeg2video",
@@ -538,7 +608,12 @@ class Transcoder:
             "-b:a", self.audio_settings.bitrate,
             "-ar", str(self.audio_settings.sample_rate),
             "-ac", str(self.audio_settings.channels),
+        ]
+        
+        if audio_filters:
+            cmd.extend(["-af", ",".join(audio_filters)])
             
+        cmd.extend([
             # Output format - use dvd for DVD VOB compatibility
             "-f", "dvd",
             
@@ -547,7 +622,7 @@ class Transcoder:
             "-nostats",
             
             str(output_path)
-        ]
+        ])
         
         logger.info(f"Transcoding: {input_path} -> {output_path}")
         logger.debug(f"Command: {' '.join(cmd)}")
