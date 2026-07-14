@@ -859,21 +859,38 @@ class JellyDiscApp(_BaseClass):
             missing.append("ffmpeg")
         if not deps.get("ffprobe"):
             missing.append("ffprobe")
+        if not deps.get("dvdauthor"):
+            missing.append("dvdauthor")
         
         if missing:
-            self._log(f"⚠️ Missing dependencies: {', '.join(missing)}")
-            self._log("Install with: sudo apt install ffmpeg")
+            self._log(f"⚠️ Missing critical dependencies: {', '.join(missing)}")
+            import platform
+            system = platform.system().lower()
+            if system == "darwin":
+                self._log("Install with: brew install ffmpeg dvdauthor")
+            elif system == "linux":
+                self._log("Install with: sudo apt install ffmpeg dvdauthor")
+            else:
+                self._log("Please install ffmpeg and dvdauthor for your system.")
         else:
-            self._log("✓ All transcoding dependencies available")
+            self._log("✓ All transcoding and authoring dependencies available")
+            
+        if not deps.get("spumux"):
+            self._log("⚠️ Missing spumux (optional, but required for active menu button highlights)")
         
         # Check ISO creation tools
         iso_tools = ["mkisofs", "genisoimage", "pycdlib"]
+        import platform
+        system = platform.system().lower()
+        if system == "darwin":
+            iso_tools.append("hdiutil")
+            
         has_iso = any(burner_deps.get(t) for t in iso_tools)
         
         if has_iso:
             self._log("✓ ISO creation available")
         else:
-            self._log("⚠️ No ISO creation tool found")
+            self._log("⚠️ No ISO creation tool found (need mkisofs, genisoimage, or python pycdlib)")
     
     def _on_connect(self):
         """Handle connect button click."""
@@ -1315,6 +1332,69 @@ class JellyDiscApp(_BaseClass):
         menu_builder = MenuBuilder(self.current_staging_dir, menu_config)
         burner = Burner(self.config.output_dir)
         
+        # --- Check System Dependencies upfront ---
+        self._update_task("Checking system dependencies...", 0)
+        self._log("Checking system dependencies...")
+        
+        transcoder_deps = check_transcoder_deps()
+        missing_critical = []
+        if not transcoder_deps.get("ffmpeg"):
+            missing_critical.append("ffmpeg")
+        if not transcoder_deps.get("ffprobe"):
+            missing_critical.append("ffprobe")
+        if not transcoder_deps.get("dvdauthor"):
+            missing_critical.append("dvdauthor")
+            
+        if missing_critical:
+            error_msg = f"Critical dependencies missing: {', '.join(missing_critical)}."
+            import platform
+            system = platform.system().lower()
+            if system == "darwin":
+                error_msg += " Please install them. Run: brew install ffmpeg dvdauthor"
+            elif system == "linux":
+                error_msg += " Please install them. Run: sudo apt install ffmpeg dvdauthor"
+            else:
+                error_msg += " Please install ffmpeg and dvdauthor for your system."
+            self._log(f"❌ {error_msg}")
+            raise RuntimeError(error_msg)
+            
+        if not transcoder_deps.get("spumux"):
+            self._log("⚠️ Warning: spumux not found. Menu button highlights will be inactive.")
+            
+        if include_subs:
+            self._log("Checking FFmpeg subtitle filter support...")
+            try:
+                import shutil
+                import subprocess
+                ffmpeg_path = shutil.which("ffmpeg")
+                if ffmpeg_path:
+                    result = subprocess.run([ffmpeg_path, "-filters"], capture_output=True, text=True, check=True)
+                    if "subtitles" not in result.stdout:
+                        self._log("⚠️ Warning: Your installed FFmpeg was not compiled with subtitle support (requires --enable-libass).")
+                        self._log("⚠️ Proceeding without burning in subtitles.")
+                        include_subs = False
+                    else:
+                        self._log("✓ FFmpeg subtitle support verified.")
+            except Exception as e:
+                self._log(f"⚠️ Could not verify FFmpeg subtitle support: {e}")
+
+        # Check ISO creation tools
+        burner_deps = check_burner_dependencies()
+        import platform
+        system = platform.system().lower()
+        
+        iso_tools = ["mkisofs", "genisoimage", "pycdlib"]
+        if system == "darwin":
+            iso_tools.append("hdiutil")
+            
+        has_iso_tool = any(burner_deps.get(t) for t in iso_tools)
+        if not has_iso_tool:
+            error_msg = "No ISO creation tool found (need mkisofs, genisoimage, or python pycdlib)."
+            self._log(f"❌ {error_msg}")
+            raise RuntimeError(error_msg)
+            
+        self._log("✓ All dependencies verified.")
+        
         # --- Download assets from Jellyfin ---
         self._update_task("Downloading Series assets...", 0)
         
@@ -1644,7 +1724,12 @@ class JellyDiscApp(_BaseClass):
                     self._log(f"✓ E{job.episode_index} completed.")
                     
                 except Exception as e:
-                    self._log(f"⚠️ Transcode failed for {job.episode_name}: {e}")
+                    err_msg = str(e)
+                    hint = ""
+                    if any(term in err_msg for term in ["Invalid data found", "moov atom not found", "Error opening input"]):
+                        hint = "\n💡 Hint: This error usually indicates that the source video file on your Jellyfin server is corrupt, incomplete, or cannot be streamed."
+                    self._log(f"❌ Transcode failed for {job.episode_name}: {err_msg}{hint}")
+                    raise RuntimeError(f"Transcode failed for {job.episode_name}: {err_msg}{hint}")
                 finally:
                     # Clean up temporary local download immediately
                     if temp_input_path.exists():
@@ -1798,8 +1883,8 @@ class JellyDiscApp(_BaseClass):
             try:
                 dvd_dir = menu_builder.build_dvd_structure(xml_path)
             except Exception as e:
-                self._log(f"⚠️ DVD structure build skipped (dvdauthor failed or not available): {e}")
-                dvd_dir = self.current_staging_dir
+                self._log(f"❌ DVD structure build failed (dvdauthor failed or not available): {e}")
+                raise RuntimeError(f"DVD structure build failed: {e}")
             
             # Step 6: Create ISO
             self._update_task(f"Disc {disc_num}: Creating ISO...", 0.8)
@@ -1836,7 +1921,8 @@ class JellyDiscApp(_BaseClass):
                 iso_files.append(iso_path)
                 self._log(f"✓ Created: {iso_path}")
             except Exception as e:
-                self._log(f"⚠️ ISO creation failed: {e}")
+                self._log(f"❌ ISO creation failed: {e}")
+                raise RuntimeError(f"ISO creation failed: {e}")
             
             self._update_overall(disc_num / len(self.disc_plans))
         
@@ -2343,6 +2429,66 @@ def run_cli(args):
     
     transcoder = Transcoder(current_staging_dir, VideoSettings(video_standard), dvd_capacity_mb=dvd_capacity_mb)
     
+    # Check dependencies upfront in CLI
+    print("Checking system dependencies...")
+    transcoder_deps = check_transcoder_deps()
+    missing_critical = []
+    if not transcoder_deps.get("ffmpeg"):
+        missing_critical.append("ffmpeg")
+    if not transcoder_deps.get("ffprobe"):
+        missing_critical.append("ffprobe")
+    if not transcoder_deps.get("dvdauthor"):
+        missing_critical.append("dvdauthor")
+        
+    if missing_critical:
+        error_msg = f"Critical dependencies missing: {', '.join(missing_critical)}."
+        import platform
+        system = platform.system().lower()
+        if system == "darwin":
+            error_msg += " Please install them. Run: brew install ffmpeg dvdauthor"
+        elif system == "linux":
+            error_msg += " Please install them. Run: sudo apt install ffmpeg dvdauthor"
+        else:
+            error_msg += " Please install ffmpeg and dvdauthor for your system."
+        print(f"❌ {error_msg}")
+        sys.exit(1)
+        
+    if not transcoder_deps.get("spumux"):
+        print("⚠️ Warning: spumux not found. Menu button highlights will be inactive.")
+        
+    if include_subs:
+        print("Checking FFmpeg subtitle filter support...")
+        try:
+            import shutil
+            import subprocess
+            ffmpeg_path = shutil.which("ffmpeg")
+            if ffmpeg_path:
+                result = subprocess.run([ffmpeg_path, "-filters"], capture_output=True, text=True, check=True)
+                if "subtitles" not in result.stdout:
+                    print("⚠️ Warning: Your installed FFmpeg was not compiled with subtitle support (requires --enable-libass).")
+                    print("⚠️ Proceeding without burning in subtitles.")
+                    include_subs = False
+                else:
+                    print("✓ FFmpeg subtitle support verified.")
+        except Exception as e:
+            print(f"⚠️ Could not verify FFmpeg subtitle support: {e}")
+
+    # Check ISO creation tools
+    burner_deps = check_burner_dependencies()
+    import platform
+    system = platform.system().lower()
+    
+    iso_tools = ["mkisofs", "genisoimage", "pycdlib"]
+    if system == "darwin":
+        iso_tools.append("hdiutil")
+        
+    has_iso_tool = any(burner_deps.get(t) for t in iso_tools)
+    if not has_iso_tool:
+        print("❌ Error: No ISO creation tool found (need mkisofs, genisoimage, or python pycdlib).")
+        sys.exit(1)
+        
+    print("✓ All dependencies verified.")
+    
     jobs = []
     for ep in season.episodes:
         filename = f"ep{ep.index_number:02d}.mpg"
@@ -2589,19 +2735,33 @@ def run_cli(args):
                 bar = '█' * filled + '-' * (30 - filled)
                 sys.stdout.write(f"\r    |{bar}| {percent:.1f}% ({dl / 1024 / 1024:.1f}/{tot / 1024 / 1024:.1f} MB)")
                 sys.stdout.flush()
-            client.download_media_file(season.episodes[job.episode_index - 1].id, temp_input, progress_callback=prog_ep)
-            print()
             
-            print(f"  Transcoding E{job.episode_index}...")
-            transcoder.transcode(str(temp_input), job.output_path, video_bitrate=disc_bitrate, extract_subs=include_subs)
-            # Extract original chapters before deleting temp file
             try:
-                ep_chapters[job.episode_index] = transcoder.get_chapters(str(temp_input))
-            except Exception:
-                pass
-            temp_input.unlink()
-            transcoded_files.append(job.output_path)
-            print(f"  ✓ E{job.episode_index} transcode complete.")
+                client.download_media_file(season.episodes[job.episode_index - 1].id, temp_input, progress_callback=prog_ep)
+                print()
+                
+                print(f"  Transcoding E{job.episode_index}...")
+                transcoder.transcode(str(temp_input), job.output_path, video_bitrate=disc_bitrate, extract_subs=include_subs)
+                # Extract original chapters before deleting temp file
+                try:
+                    ep_chapters[job.episode_index] = transcoder.get_chapters(str(temp_input))
+                except Exception:
+                    pass
+                transcoded_files.append(job.output_path)
+                print(f"  ✓ E{job.episode_index} transcode complete.")
+            except Exception as e:
+                err_msg = str(e)
+                hint = ""
+                if any(term in err_msg for term in ["Invalid data found", "moov atom not found", "Error opening input"]):
+                    hint = "\n💡 Hint: This error usually indicates that the source video file on your Jellyfin server is corrupt, incomplete, or cannot be streamed."
+                print(f"\n❌ Transcode failed for {job.episode_name}: {err_msg}{hint}")
+                raise RuntimeError(f"Transcode failed for {job.episode_name}: {err_msg}{hint}")
+            finally:
+                if temp_input.exists():
+                    try:
+                        temp_input.unlink()
+                    except Exception:
+                        pass
             
         # Menus
         print("  Generating menus...")
