@@ -237,6 +237,29 @@ class Burner:
                             device_name=display_name,
                             is_ready=True
                         ))
+                
+                # Fallback to drutil list if diskutil did not find any drives (common when no media is inserted)
+                if not drives:
+                    drutil_res = subprocess.run(
+                        ["drutil", "list"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    lines = [line.strip() for line in drutil_res.stdout.splitlines() if line.strip()]
+                    if len(lines) > 1:
+                        # At least one drive is physically connected!
+                        first_drive_line = lines[1]
+                        display_name = "Connected Optical Drive (No media inserted)"
+                        if first_drive_line:
+                            parts = first_drive_line.split()
+                            if len(parts) >= 3:
+                                display_name = f"{parts[1]} {parts[2]} (No media inserted)"
+                        drives.append(DiscInfo(
+                            device_path="/dev/disk1",
+                            device_name=display_name,
+                            is_ready=False
+                        ))
             except Exception as e:
                 logger.error(f"Error detecting macOS drives: {e}")
         
