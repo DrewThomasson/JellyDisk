@@ -1,0 +1,1262 @@
+/* App.css - JellyDiskWeb stylesheet */
+
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Share+Tech+Mono&display=swap');
+
+:root {
+  --color-bg-dark: #09090e;
+  --color-bg-card: rgba(18, 18, 29, 0.7);
+  --color-text-primary: #ffffff;
+  --color-text-secondary: #a0a0ba;
+  --color-dvd-gold: #ffd700;
+  --color-dvd-highlight-bg: rgba(255, 215, 0, 0.15);
+  --color-dvd-select: #ffffff;
+  --color-dvd-blue-dark: rgba(15, 15, 25, 0.8);
+  --font-dvd: 'Outfit', sans-serif;
+  --font-mono: 'Share Tech Mono', monospace;
+  --dvd-shadow: 0 10px 30px rgba(0, 0, 0, 0.8);
+  --dvd-border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+body {
+  background-color: var(--color-bg-dark);
+  color: var(--color-text-primary);
+  font-family: var(--font-dvd);
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at center, #1b1b2f 0%, #09090e 100%);
+  overflow-x: hidden;
+}
+
+/* App Wrapper */
+.jellydisk-app {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 30px;
+  max-width: 1400px;
+  width: 95%;
+  margin: 20px auto;
+  box-sizing: border-box;
+}
+
+@media (max-width: 1100px) {
+  .jellydisk-app {
+    flex-direction: column;
+    align-items: center;
+  }
+}
+
+/* Home / Login Panel */
+.setup-panel {
+  background: var(--color-bg-card);
+  backdrop-filter: blur(16px);
+  border: var(--dvd-border);
+  border-radius: 20px;
+  padding: 40px;
+  width: 100%;
+  max-width: 500px;
+  box-shadow: var(--dvd-shadow);
+  box-sizing: border-box;
+  text-align: left;
+  animation: fadeIn 0.5s ease-out;
+}
+
+.setup-panel h2 {
+  font-size: 2rem;
+  font-weight: 800;
+  margin-top: 0;
+  margin-bottom: 10px;
+  background: linear-gradient(45deg, #fff, #a0a0ba);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.setup-panel p {
+  color: var(--color-text-secondary);
+  font-size: 0.95rem;
+  margin-bottom: 30px;
+  line-height: 1.5;
+}
+
+.setup-form-group {
+  margin-bottom: 20px;
+}
+
+.setup-form-group label {
+  display: block;
+  font-weight: 600;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 8px;
+  color: var(--color-text-secondary);
+}
+
+.setup-form-group input {
+  width: 100%;
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #fff;
+  font-family: var(--font-dvd);
+  font-size: 1rem;
+  box-sizing: border-box;
+  transition: all 0.25s ease;
+}
+
+.setup-form-group input:focus {
+  outline: none;
+  border-color: var(--color-dvd-gold);
+  box-shadow: 0 0 10px rgba(255, 215, 0, 0.2);
+}
+
+.setup-btn {
+  width: 100%;
+  padding: 14px;
+  background: linear-gradient(135deg, var(--color-dvd-gold) 0%, #cc9900 100%);
+  border: none;
+  border-radius: 10px;
+  color: #000;
+  font-size: 1rem;
+  font-weight: 800;
+  cursor: pointer;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  transition: all 0.25s ease;
+  margin-top: 10px;
+}
+
+.setup-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 5px 15px rgba(255, 215, 0, 0.4);
+}
+
+.setup-btn:active {
+  transform: translateY(0);
+}
+
+.error-message {
+  background: rgba(255, 0, 0, 0.15);
+  border: 1px solid rgba(255, 0, 0, 0.3);
+  color: #ff6b6b;
+  padding: 12px;
+  border-radius: 8px;
+  margin-bottom: 20px;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+/* Browser / Library View */
+.library-panel {
+  background: var(--color-bg-card);
+  backdrop-filter: blur(16px);
+  border: var(--dvd-border);
+  border-radius: 20px;
+  padding: 30px;
+  width: 100%;
+  max-width: 900px;
+  box-shadow: var(--dvd-shadow);
+  box-sizing: border-box;
+  animation: fadeIn 0.5s ease-out;
+}
+
+.library-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 30px;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.library-title {
+  margin: 0;
+  font-size: 1.8rem;
+  font-weight: 800;
+}
+
+.library-search-container {
+  display: flex;
+  gap: 10px;
+  flex-grow: 1;
+  max-width: 450px;
+}
+
+.library-search-container input {
+  flex-grow: 1;
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font-size: 0.95rem;
+}
+
+.library-search-container input:focus {
+  outline: none;
+  border-color: var(--color-dvd-gold);
+}
+
+.logout-btn {
+  padding: 10px 18px;
+  background: rgba(255, 255, 255, 0.08);
+  border: var(--dvd-border);
+  border-radius: 8px;
+  color: var(--color-text-secondary);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.logout-btn:hover {
+  background: rgba(255, 0, 0, 0.2);
+  color: #fff;
+  border-color: rgba(255, 0, 0, 0.3);
+}
+
+.library-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 20px;
+  max-height: 50vh;
+  overflow-y: auto;
+  padding-right: 8px;
+}
+
+/* Custom Scrollbar */
+.library-grid::-webkit-scrollbar, .episode-list-scroller::-webkit-scrollbar {
+  width: 6px;
+}
+.library-grid::-webkit-scrollbar-track, .episode-list-scroller::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+}
+.library-grid::-webkit-scrollbar-thumb, .episode-list-scroller::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+}
+
+.show-card {
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  position: relative;
+}
+
+.show-card:hover {
+  transform: translateY(-5px);
+  border-color: var(--color-dvd-gold);
+  box-shadow: 0 5px 15px rgba(255, 215, 0, 0.15);
+}
+
+.show-card-image {
+  width: 100%;
+  aspect-ratio: 2/3;
+  object-fit: cover;
+  background: #111;
+  display: block;
+}
+
+.show-card-info {
+  padding: 12px;
+  text-align: left;
+}
+
+.show-card-title {
+  margin: 0 0 4px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.show-card-meta {
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+}
+
+/* Season Selector */
+.season-selector h3 {
+  margin-top: 0;
+  margin-bottom: 20px;
+}
+
+.season-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 20px;
+}
+
+.season-card {
+  background: rgba(0, 0, 0, 0.3);
+  border: var(--dvd-border);
+  border-radius: 12px;
+  padding: 15px;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: center;
+}
+
+.season-card:hover {
+  border-color: var(--color-dvd-gold);
+  transform: scale(1.03);
+  box-shadow: 0 0 10px rgba(255, 215, 0, 0.2);
+}
+
+.season-card-img {
+  width: 100%;
+  aspect-ratio: 2/3;
+  object-fit: cover;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  background: #111;
+}
+
+.season-card-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+/* Back Button for selectors */
+.back-nav-btn {
+  margin-bottom: 20px;
+  background: transparent;
+  border: none;
+  color: var(--color-text-secondary);
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.95rem;
+}
+
+.back-nav-btn:hover {
+  color: #fff;
+}
+
+/* ---------------------------------------------------- */
+/* DVD Player Interface */
+/* ---------------------------------------------------- */
+.dvd-player-frame {
+  flex-grow: 1;
+  max-width: 960px;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.9), 0 0 0 4px #222;
+  position: relative;
+  border: 1px solid rgba(255,255,255,0.05);
+}
+
+/* Simulated CRT TV Effect */
+.crt-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 100;
+  background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+  background-size: 100% 4px, 6px 100%;
+}
+
+.crt-vignette {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 101;
+  box-shadow: inset 0 0 100px rgba(0,0,0,0.8);
+}
+
+/* CRT Screen Bulge & Scanlines Animation */
+.crt-active {
+  animation: crt-flicker 0.15s infinite;
+}
+
+@keyframes crt-flicker {
+  0% { opacity: 0.99; }
+  50% { opacity: 1; }
+  100% { opacity: 0.995; }
+}
+
+/* DVD Menu Display Container */
+.dvd-screen {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  overflow: hidden;
+}
+
+/* DVD Backdrop Blend Layer (Darken Backdrop exactly like Python 0.65 blend) */
+.dvd-backdrop-dimmer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(15, 15, 25, 0.65);
+  z-index: 1;
+}
+
+/* CRT Retro style scanlines toggle */
+.dvd-retro-scanlines {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0.15) 0px,
+    rgba(0, 0, 0, 0.15) 1px,
+    transparent 1px,
+    transparent 2px
+  );
+  z-index: 5;
+}
+
+.dvd-retro-blur {
+  filter: blur(0.5px);
+}
+
+/* DVD Content Container (above dimming layer) */
+.dvd-content {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  padding: 30px 50px; /* Safe Margin X: 50, Y: 30 */
+  box-sizing: border-box;
+}
+
+/* DVD Logo/Header (scaled 65px max height) */
+.dvd-header {
+  height: 65px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 25px;
+  flex-shrink: 0;
+}
+
+.dvd-logo {
+  max-height: 65px;
+  max-width: 753px; /* 853 - 2 * 50 safe margins */
+  object-fit: contain;
+}
+
+.dvd-title-fallback {
+  font-family: var(--font-dvd);
+  font-size: 2.2rem;
+  font-weight: 800;
+  color: var(--color-text-primary);
+  text-shadow: 2px 2px 8px rgba(0, 0, 0, 0.8);
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* DVD Menu Main Content Area */
+.dvd-body {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Dynamic button layouts based on count */
+.dvd-buttons-vertical {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px; /* Variable gaps based on number of buttons */
+}
+
+/* DVD Text Button Style (identical outline highlighting on hover/focus) */
+.dvd-btn {
+  background: transparent;
+  border: 3px solid transparent; /* Highlight border is transparent by default */
+  color: var(--color-text-primary);
+  font-family: var(--font-dvd);
+  font-size: 1.4rem;
+  font-weight: 600;
+  padding: 6px 20px;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  position: relative;
+  text-shadow: 0 2px 5px rgba(0, 0, 0, 0.8);
+  outline: none;
+}
+
+/* Focused / Highlighted state - Gold Border exactly like DVD highlight_color */
+.dvd-btn.highlighted, .dvd-btn:hover {
+  border-color: var(--color-dvd-gold);
+  color: var(--color-text-primary);
+  box-shadow: none;
+  background-color: transparent;
+}
+
+/* Selected / Active state - White Border exactly like select_color */
+.dvd-btn.selected, .dvd-btn:active {
+  border-color: var(--color-dvd-select);
+  color: var(--color-text-primary);
+  background-color: transparent;
+}
+
+/* Bottom Navigation Bar for Sub-Menus */
+.dvd-nav-bottom {
+  position: absolute;
+  bottom: 25px;
+  left: 0;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 40px;
+  z-index: 10;
+}
+
+.dvd-nav-bottom .dvd-btn {
+  font-size: 1rem;
+  color: var(--color-text-secondary);
+  border-width: 2px;
+  padding: 4px 14px;
+}
+
+.dvd-nav-bottom .dvd-btn.highlighted, .dvd-nav-bottom .dvd-btn:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-dvd-gold);
+}
+
+/* Sub-Menu Subtitle */
+.dvd-subtitle {
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  margin-top: -15px;
+  margin-bottom: 20px;
+  text-align: center;
+  text-shadow: 1px 1px 4px rgba(0, 0, 0, 0.8);
+}
+
+/* ---------------------------------------------------- */
+/* DVD Screen Layouts */
+/* ---------------------------------------------------- */
+
+/* 1. Episode Select Menu */
+.dvd-episode-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 180px); /* thumbnail_width */
+  grid-template-rows: repeat(2, auto);
+  gap: 30px 40px; /* grid_padding */
+  justify-content: center;
+  align-content: center;
+  margin-top: 10px;
+}
+
+.dvd-episode-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 180px;
+  cursor: pointer;
+  outline: none;
+}
+
+.dvd-episode-thumb-container {
+  width: 180px;
+  height: 101px; /* thumbnail_height */
+  border: 4px solid transparent;
+  border-radius: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+  background: #151520;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.dvd-episode-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.dvd-episode-placeholder-text {
+  font-family: var(--font-dvd);
+  font-size: 1.4rem;
+  font-weight: 800;
+  color: #444455;
+  text-shadow: none;
+}
+
+.dvd-episode-title {
+  margin-top: 6px;
+  font-size: 0.72rem; /* 12px relative */
+  font-weight: 600;
+  color: var(--color-text-primary);
+  text-align: center;
+  width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+/* Highlights for grids */
+.dvd-episode-card.highlighted .dvd-episode-thumb-container,
+.dvd-episode-card:hover .dvd-episode-thumb-container {
+  border-color: var(--color-dvd-gold);
+  box-shadow: none;
+}
+
+.dvd-episode-card.selected .dvd-episode-thumb-container {
+  border-color: var(--color-dvd-select);
+}
+
+/* 2. Setup Menu Layout */
+.dvd-setup-options {
+  display: flex;
+  flex-direction: row;
+  justify-content: center;
+  gap: 50px;
+  margin-top: 20px;
+  margin-bottom: 50px;
+}
+
+.dvd-setup-indicator {
+  font-size: 0.8rem;
+  color: var(--color-dvd-gold);
+  margin-top: 5px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+/* 3. Cast & Info Layout */
+.dvd-cast-layout {
+  display: flex;
+  width: 100%;
+  height: 280px; /* Fits exactly within vertical bounds */
+  gap: 30px;
+  box-sizing: border-box;
+  text-align: left;
+}
+
+.dvd-show-summary-col {
+  width: 48%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.dvd-cast-grid-col {
+  width: 52%;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: repeat(3, 50px);
+  gap: 15px;
+}
+
+.dvd-section-label {
+  font-size: 0.9rem; /* 16px */
+  font-weight: 800;
+  color: var(--color-text-secondary);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+  padding-bottom: 4px;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.dvd-summary-text {
+  font-size: 0.65rem; /* 11px */
+  line-height: 1.4;
+  color: var(--color-text-primary);
+  overflow-y: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 10;
+  -webkit-box-orient: vertical;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.dvd-crew-details {
+  margin-top: 15px;
+  font-size: 0.6rem;
+}
+
+.dvd-crew-item {
+  margin-bottom: 6px;
+}
+
+.dvd-crew-label {
+  color: var(--color-text-secondary);
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.dvd-actor-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dvd-actor-headshot {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: #20202e;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  object-fit: cover;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-weight: 800;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.dvd-actor-meta {
+  overflow: hidden;
+}
+
+.dvd-actor-name {
+  font-size: 0.72rem; /* 12px */
+  font-weight: 800;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.dvd-actor-role {
+  font-size: 0.6rem; /* 10px */
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+/* 4. Trivia Menu Layout */
+.dvd-trivia-panel {
+  background: #000000; /* Flat black background */
+  border: 2px solid var(--color-dvd-gold);
+  padding: 25px 35px;
+  width: 90%;
+  max-width: 680px;
+  box-sizing: border-box;
+  text-align: center;
+  border-radius: 0; /* Pure blocky style matching DVD */
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.9);
+  margin: 0 auto;
+}
+
+.dvd-trivia-q-box {
+  margin-bottom: 20px;
+  text-align: center;
+}
+
+.dvd-trivia-q-text {
+  font-family: var(--font-dvd);
+  font-size: 1.25rem;
+  font-weight: 400;
+  line-height: 1.4;
+  margin: 0;
+  color: var(--color-text-primary);
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+  border-bottom: 1px solid rgba(255, 215, 0, 0.2);
+  padding-bottom: 12px;
+}
+
+.dvd-trivia-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 15px 30px;
+  margin-bottom: 15px;
+}
+
+.dvd-trivia-option {
+  background: transparent;
+  border: 2px solid transparent;
+  color: var(--color-text-primary);
+  font-family: var(--font-dvd);
+  font-size: 0.95rem;
+  font-weight: 600;
+  padding: 8px 12px;
+  cursor: pointer;
+  text-transform: uppercase;
+  text-align: left; /* Left align like A. B. C. D. on DVD */
+  outline: none;
+  border-radius: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dvd-trivia-option.highlighted, .dvd-trivia-option:hover {
+  border-color: var(--color-dvd-gold);
+  background-color: transparent;
+}
+
+.dvd-trivia-exit-container {
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding-top: 12px;
+  margin-top: 10px;
+  display: flex;
+  justify-content: center;
+}
+
+.dvd-trivia-status-title {
+  font-size: 2.2rem; /* size 42 scale */
+  font-weight: 800;
+  margin-bottom: 10px;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+}
+
+.dvd-trivia-status-title.wrong {
+  color: rgb(230, 70, 70);
+  text-shadow: 0 0 10px rgba(230, 70, 70, 0.3);
+}
+
+.dvd-trivia-status-title.win {
+  color: rgb(230, 200, 70);
+  text-shadow: 0 0 10px rgba(230, 200, 70, 0.3);
+}
+
+.dvd-trivia-status-sub {
+  font-size: 1.1rem; /* size 20 scale */
+  color: var(--color-text-secondary);
+  margin-bottom: 35px;
+}
+
+/* ---------------------------------------------------- */
+/* Video Player Overlay */
+/* ---------------------------------------------------- */
+.dvd-video-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: #000;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+
+.dvd-video-player {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* Subtitles styling in html5 player overlay */
+::cue {
+  background-color: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font-family: var(--font-dvd);
+  font-size: 1.1rem;
+}
+
+.video-back-indicator {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  background: rgba(0, 0, 0, 0.6);
+  border: var(--dvd-border);
+  padding: 8px 15px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  color: #ccc;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s;
+  z-index: 60;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.dvd-video-container:hover .video-back-indicator {
+  opacity: 1;
+}
+
+/* ---------------------------------------------------- */
+/* Retro DVD Remote Control */
+/* ---------------------------------------------------- */
+.dvd-remote-control {
+  width: 180px;
+  background: linear-gradient(135deg, #1c1d24 0%, #0e0f12 100%);
+  border: 2px solid #2d2e38;
+  border-radius: 24px;
+  padding: 20px 12px;
+  box-shadow: 0 15px 40px rgba(0, 0, 0, 0.8), inset 0 2px 3px rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 15px;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.remote-label {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: #626475;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  border-bottom: 1px solid #2d2e38;
+  width: 100%;
+  text-align: center;
+  padding-bottom: 6px;
+}
+
+.remote-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  width: 100%;
+}
+
+.remote-btn {
+  background: #25262f;
+  border: 1px solid #17181e;
+  border-radius: 6px;
+  color: #c5c6d0;
+  font-family: var(--font-dvd);
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 8px 2px;
+  cursor: pointer;
+  text-transform: uppercase;
+  transition: all 0.1s;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.4);
+}
+
+.remote-btn:hover {
+  background: #323441;
+  color: #fff;
+  border-color: #3b3d4d;
+}
+
+.remote-btn:active {
+  transform: translateY(1px);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.6);
+  background: #1b1c23;
+}
+
+.remote-btn.red {
+  background: #801a1a;
+  border-color: #591212;
+  color: #ffb3b3;
+}
+.remote-btn.red:hover {
+  background: #992222;
+  color: #fff;
+}
+
+.remote-btn.gold {
+  background: #806600;
+  border-color: #594700;
+  color: #ffe680;
+}
+.remote-btn.gold:hover {
+  background: #997a00;
+  color: #fff;
+}
+
+/* D-Pad Layout */
+.remote-dpad {
+  position: relative;
+  width: 130px;
+  height: 130px;
+  background: #16171d;
+  border-radius: 50%;
+  border: 2px solid #2d2e38;
+  margin: 10px 0;
+  box-shadow: inset 0 5px 10px rgba(0,0,0,0.6);
+}
+
+.dpad-btn {
+  position: absolute;
+  background: #2a2b36;
+  border: 1px solid #1a1b22;
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.4);
+  transition: all 0.1s;
+}
+
+.dpad-btn:hover {
+  background: #333544;
+}
+
+.dpad-btn:active {
+  background: #1a1b22;
+}
+
+.dpad-up {
+  top: 4px;
+  left: 45px;
+  width: 40px;
+  height: 35px;
+  border-radius: 6px 6px 0 0;
+}
+
+.dpad-down {
+  bottom: 4px;
+  left: 45px;
+  width: 40px;
+  height: 35px;
+  border-radius: 0 0 6px 6px;
+}
+
+.dpad-left {
+  left: 4px;
+  top: 45px;
+  width: 35px;
+  height: 40px;
+  border-radius: 6px 0 0 6px;
+}
+
+.dpad-right {
+  right: 4px;
+  top: 45px;
+  width: 35px;
+  height: 40px;
+  border-radius: 0 6px 6px 0;
+}
+
+.dpad-enter {
+  top: 45px;
+  left: 45px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--color-dvd-gold) 0%, #b38600 100%);
+  border: 1px solid #664d00;
+  color: #000;
+  font-size: 0.65rem;
+  font-weight: 800;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+}
+
+.dpad-enter:hover {
+  background: linear-gradient(135deg, #ffe033 0%, var(--color-dvd-gold) 100%);
+}
+
+.dpad-enter:active {
+  background: #806000;
+}
+
+/* CRT Toggle Switches */
+.remote-options {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid #2d2e38;
+  padding-top: 12px;
+}
+
+.toggle-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.65rem;
+  color: #a0a0ba;
+  font-weight: 600;
+}
+
+/* Simple switch checkbox styling */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 34px;
+  height: 18px;
+}
+
+.switch input { 
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #25262f;
+  transition: .2s;
+  border-radius: 18px;
+  border: 1px solid #17181e;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 12px;
+  width: 12px;
+  left: 2px;
+  bottom: 2px;
+  background-color: #a0a0ba;
+  transition: .2s;
+  border-radius: 50%;
+}
+
+input:checked + .slider {
+  background-color: #806600;
+}
+
+input:checked + .slider:before {
+  transform: translateX(16px);
+  background-color: var(--color-dvd-gold);
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Audio status indicator in DVD screen */
+.audio-muted-banner {
+  position: absolute;
+  top: 15px;
+  right: 15px;
+  background: rgba(0, 0, 0, 0.85);
+  border: 1px solid var(--color-dvd-gold);
+  border-radius: 20px;
+  padding: 6px 12px;
+  font-size: 0.7rem;
+  color: var(--color-dvd-gold);
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  z-index: 10;
+  cursor: pointer;
+  animation: pulse-border 1.5s infinite alternate;
+}
+
+@keyframes pulse-border {
+  from { box-shadow: 0 0 2px rgba(255, 215, 0, 0.4); }
+  to { box-shadow: 0 0 10px rgba(255, 215, 0, 0.8); }
+}
+
+/* ---------------------------------------------------- */
+/* CRT Screen Curvature Simulation Bezel & Glare Overlay */
+/* ---------------------------------------------------- */
+
+/* CRT Glass Glare Overlay */
+.crt-glare {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: radial-gradient(circle at 50% 15%, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0) 55%),
+              radial-gradient(circle at 15% 15%, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0) 30%);
+  pointer-events: none;
+  z-index: 102;
+}
+
+/* CRT rounded Bezel overlay to clip corners and simulate tube bezel */
+.crt-bezel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border: 16px solid #141416;
+  border-radius: 20px;
+  box-sizing: border-box;
+  pointer-events: none;
+  z-index: 103;
+  box-shadow: inset 0 0 35px rgba(0,0,0,1), 0 0 15px rgba(0,0,0,0.8);
+}
+
+/* Curve the inner display container when CRT is active */
+.dvd-player-frame.crt-active .dvd-screen {
+  border-radius: 35px;
+  transform: scale(0.975);
+  box-shadow: inset 0 0 30px rgba(0, 0, 0, 0.8);
+  transition: all 0.3s;
+}
+
+/* HTML5 Fullscreen Centering & Styling */
+.dvd-player-frame:fullscreen {
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: none !important;
+  border-radius: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  background: #000 !important;
+}
+
+.dvd-player-frame:fullscreen .dvd-screen {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 177.78vh !important; /* Locks 16:9 aspect ratio */
+  max-height: 56.25vw !important;
+  margin: auto !important;
+  position: relative !important;
+}
+
+/* Bezel adjustment for fullscreen */
+.dvd-player-frame:fullscreen .crt-bezel {
+  border-width: 25px !important;
+}
