@@ -1,0 +1,7 @@
+services:
+  jellydisk-web:
+    build: .
+    container_name: jellydisk-web
+    ports:
+      - "8080:80"
+    restart: unless-stopped

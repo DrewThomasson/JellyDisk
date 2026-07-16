@@ -67,3 +67,22 @@ npm run build
 ```
 
 This compiles a single, lightweight HTML/CSS/JS client-side bundle in the `dist/` directory. You can host this folder on any static web server (GitHub Pages, Cloudflare Pages, Netlify, Nginx, or directly inside a Jellyfin custom page block).
+
+### Docker Deployment
+
+If you prefer to run the application inside a container, you can build and run it using the provided Docker files.
+
+1. Build and start the container in the background:
+   ```bash
+   docker compose up -d
+   ```
+
+2. Access the application in your browser at:
+   ```
+   http://localhost:8080
+   ```
+
+To stop the container:
+```bash
+docker compose down
+```
