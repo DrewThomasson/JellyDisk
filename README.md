@@ -3,7 +3,8 @@
 An automated DVD authoring suite that connects to your Jellyfin server, downloads TV show seasons, and creates commercial-grade DVD ISOs with interactive menus, metadata, and subtitles.
 
 > [!IMPORTANT]
-> Want to see what show's dvd would look like without burning an ISO? Checkout the [JellyDisk Web Interface](JellyDiskWeb/README.md)
+> Want to see what show's dvd would look like without burning an ISO? 
+> Checkout the [JellyDisk Web Interface](JellyDiskWeb/README.md)
 
 <img width="5712" height="4284" alt="IMG_2098" src="https://github.com/user-attachments/assets/0e3f5a7c-2b64-4552-bf19-54656681f7da" />
 <img width="5712" height="4284" alt="IMG_2095" src="https://github.com/user-attachments/assets/e26b6e79-5218-4838-be1e-cc80e9dda3c6" />
