@@ -1,0 +1,15 @@
+# Dependencies and build output
+node_modules
+dist
+
+# Version control and local configuration
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+
+# Development artifacts
+coverage
+*.log
+.DS_Store

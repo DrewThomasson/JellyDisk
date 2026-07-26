@@ -1,0 +1,41 @@
+# Version control and local configuration
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+
+# Python environments and generated files
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Runtime data is mounted into the container by Compose
+assets
+staging
+output
+
+# The web application has its own Docker build context
+JellyDiskWeb
+
+# Development-only files
+tests
+docs
+example_printable_inserts
+.DS_Store
+
+# Large local media and authored disc artifacts
+*.avi
+*.iso
+*.m2v
+*.m4v
+*.mkv
+*.mov
+*.mp4
+*.mpeg
+*.mpg
+*.vob
