@@ -171,6 +171,17 @@ class ArtGenerator:
             start_y = (new_h - target_h) // 2
             return img_resized.crop((0, start_y, target_w, start_y + target_h))
 
+    @staticmethod
+    def _save_screen_preview(image: Image.Image, preview_path: Optional[Path]) -> None:
+        """Save a screen-sized PNG from the same canvas used for a print PDF."""
+        if not preview_path:
+            return
+        preview_path = Path(preview_path)
+        preview_path.parent.mkdir(parents=True, exist_ok=True)
+        preview = image.convert("RGB")
+        preview.thumbnail((1400, 1000), Image.Resampling.LANCZOS)
+        preview.save(preview_path, "PNG", optimize=True)
+
     def _extract_theme_colors(self, poster_path: Optional[Path], backdrop_path: Optional[Path]) -> tuple:
         """
         Extract dominant background and vibrant accent colors from poster or backdrop.
@@ -262,7 +273,8 @@ class ArtGenerator:
                           actors: Optional[List[str]] = None,
                           directors: Optional[List[str]] = None,
                           writers: Optional[List[str]] = None,
-                          dvd_capacity_mb: int = 4100) -> Path:
+                          dvd_capacity_mb: int = 4100,
+                          preview_path: Optional[Path] = None) -> Path:
         """
         Generate a printable DVD case cover wrap (back, spine, and front).
         Saves as a high-quality PDF at 300 DPI.
@@ -578,6 +590,7 @@ class ArtGenerator:
         
         final_pdf_path = output_path
         rgb_canvas = canvas.convert('RGB')
+        self._save_screen_preview(rgb_canvas, preview_path)
         rgb_canvas.save(final_pdf_path, 'PDF', resolution=300.0)
         logger.info(f"✓ DVD Cover Wrap PDF generated successfully at: {final_pdf_path}")
         return final_pdf_path
@@ -592,7 +605,8 @@ class ArtGenerator:
                                output_path: Path,
                                actors: Optional[List[str]] = None,
                                directors: Optional[List[str]] = None,
-                               writers: Optional[List[str]] = None) -> Path:
+                               writers: Optional[List[str]] = None,
+                               preview_path: Optional[Path] = None) -> Path:
         """
         Generate a multi-page printable folio / insert booklet detailing each episode.
         Saves as a multi-page PDF at 300 DPI.
@@ -908,6 +922,7 @@ class ArtGenerator:
         
         final_pdf_path = output_path
         rgb_pages = [p.convert('RGB') for p in pages]
+        self._save_screen_preview(rgb_pages[0], preview_path)
         
         rgb_pages[0].save(
             final_pdf_path, 
@@ -927,7 +942,8 @@ class ArtGenerator:
                             episodes: list,
                             backdrop_path: Optional[Path],
                             logo_path: Optional[Path],
-                            output_path: Path) -> Path:
+                            output_path: Path,
+                            preview_path: Optional[Path] = None) -> Path:
         """
         Generate a printable CD/DVD disc label face.
         Saves as a high-quality PDF at 300 DPI, with transparency mask for the hole.
@@ -1074,6 +1090,7 @@ class ArtGenerator:
         white_bg.paste(canvas, (0, 0), canvas)
         
         final_pdf_path = output_path
+        self._save_screen_preview(white_bg, preview_path)
         white_bg.save(final_pdf_path, 'PDF', resolution=300.0)
         logger.info(f"✓ DVD Disc Label PDF generated successfully at: {final_pdf_path}")
         return final_pdf_path

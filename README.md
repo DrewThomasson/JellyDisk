@@ -3,8 +3,7 @@
 </p>
 
 <p align="center">
-  Turn a Jellyfin season into a polished, playable DVD—menus, subtitles,
-  printable artwork, and all.
+  Make DVDs from a Jellyfin library.
 </p>
 
 <p align="center">
@@ -14,16 +13,15 @@
   <img alt="Platforms" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-252a34?style=flat-square">
 </p>
 
-JellyDisk connects to your Jellyfin server, downloads a movie or TV season,
-transcodes it to DVD-compliant media, authors interactive menus, and packages
-the result as a ready-to-burn ISO. It also creates matching cover art, an
-episode booklet, and disc labels from your library metadata.
+JellyDisk is a desktop app and command-line tool for turning movies and TV
+seasons from a Jellyfin server into DVD ISOs. It handles the transcoding,
+menus, subtitles, disc splitting, and printable case artwork.
 
 > [!TIP]
-> Want to preview the DVD experience without authoring an ISO? Try the
+> To try the menus without authoring an ISO, use the
 > [JellyDisk Web Interface](JellyDiskWeb/README.md).
 
-## See it in action
+## Screenshots
 
 <table>
   <tr>
@@ -41,18 +39,15 @@ Sample print files:
 · [disc label](https://github.com/user-attachments/files/29831461/Smiling.Friends_Season.1_Disc_1_Label.pdf)
 · [DVD cover](https://github.com/user-attachments/files/29831462/Smiling.Friends_Season.1_DVD_Cover.pdf)
 
-## What it does
+## Features
 
-| | Capability | Details |
-|---|---|---|
-| 📺 | Jellyfin integration | Browse movies, shows, seasons, artwork, and metadata from your server. |
-| 💿 | DVD authoring | Create DVD-compliant MPEG-2/AC-3 media and ready-to-burn ISO images. |
-| 🧭 | Interactive menus | Build paginated episode selection, cast pages, setup screens, and theme audio. |
-| 💬 | Subtitles | Download, extract, and render subtitle tracks for DVD playback. |
-| 📐 | Smart disc planning | Calculate bitrate automatically and split oversized seasons across discs. |
-| 🎨 | Printable artwork | Generate 300-DPI cover wraps, episode booklets, and circular disc labels. |
-| 🔥 | Cross-platform burning | Use native tooling on macOS, Linux, and Windows, including rewritable-disc erase utilities. |
-| 🐳 | Headless and Docker workflows | Run interactively, automate from the CLI, or author on a home server. |
+- Browse shows, movies, and seasons from Jellyfin.
+- Preview the DVD case and printed disc before starting a build.
+- Create episode menus, cast pages, subtitle controls, and optional trivia.
+- Fit a season to DVD-5 or DVD-9 and split it across discs when needed.
+- Export an ISO or burn directly on supported systems.
+- Generate a case wrap, episode booklet, and disc label at 300 DPI.
+- Run from the desktop app, the CLI, or Docker.
 
 ## Quick start
 
@@ -67,8 +62,8 @@ pip install -r requirements.txt
 python -m jellydisc.main
 ```
 
-JellyDisk also needs `ffmpeg`, `dvdauthor`, and `spumux`. See
-[Installation](#installation) for platform-specific commands.
+You will also need `ffmpeg`, `dvdauthor`, and `spumux`. Platform-specific
+installation commands are below.
 
 ## Requirements
 
@@ -263,25 +258,6 @@ All generated artwork PDFs are configured at high-resolution **300 DPI** to matc
 > When printing the generated PDFs, you **must** configure your printer settings as follows:
 > - Set **Page Scaling / Scale** to **"Actual Size"** or **"100%"**.
 > - Do **not** select *"Fit to Page"*, *"Scale to Fit"*, or *"Shrink to Fit"*, as this will stretch the images to fill the entire sheet of paper, making them too large to fit in your DVD cases.
-
-## Development Roadmap
-
-- [x] **Phase 1: Scaffolding**
-  - [x] Project structure
-  - [x] Requirements
-  - [x] Jellyfin client module
-- [x] **Phase 2: The Engine**
-  - [x] Transcoder (ffmpeg wrapper)
-  - [x] Bitrate scaling and disc spanning
-  - [x] Menu builder (Pillow + dvdauthor + spumux highlights)
-- [x] **Phase 3: The UI**
-  - [x] Login screen
-  - [x] Library browser & visual poster previews
-  - [x] Authoring & burn dashboard with log console
-- [x] **Phase 4: Output**
-  - [x] ISO creation
-  - [x] Standalone disc erasing tool
-  - [x] Cross-platform burner integration (hdiutil, ImgBurn, growisofs)
 
 ## License
 

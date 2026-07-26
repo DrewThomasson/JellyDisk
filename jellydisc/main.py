@@ -11,6 +11,7 @@ import logging
 import os
 import sys
 import threading
+import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Callable
@@ -73,6 +74,7 @@ from .burner import (
     check_burner_dependencies
 )
 from .art_generator import ArtGenerator
+from .preview_renderer import DVDPreviewRenderer
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +86,7 @@ def sanitize_filename(name: str, max_length: int = 200) -> str:
     Args:
         name: Original filename
         max_length: Maximum length for the filename
-        
+
     Returns:
         Safe filename string
     """
@@ -207,9 +209,9 @@ class JellyDiscApp(_BaseClass):
     def __init__(self):
         super().__init__()
         
-        self.title("JellyDisc - DVD Authoring Suite")
-        self.geometry("1000x780")
-        self.minsize(800, 680)
+        self.title("JellyDisk")
+        self.geometry("1180x820")
+        self.minsize(980, 720)
         
         # Application state
         self.config = AppConfig()
@@ -236,10 +238,10 @@ class JellyDiscApp(_BaseClass):
         self.tabview.pack(fill="both", expand=True, padx=10, pady=10)
         
         # Add tabs
-        self.tab_connect = self.tabview.add("Connect")
-        self.tab_library = self.tabview.add("Library")
-        self.tab_config = self.tabview.add("Authoring")
-        self.tab_burn = self.tabview.add("Burn")
+        self.tab_connect = self.tabview.add("1  Connect")
+        self.tab_library = self.tabview.add("2  Library")
+        self.tab_config = self.tabview.add("3  Preview")
+        self.tab_burn = self.tabview.add("4  Output")
         
         # Build each tab
         self._create_connect_tab()
@@ -270,7 +272,7 @@ class JellyDiscApp(_BaseClass):
         # Title
         title = ctk.CTkLabel(
             center_frame, 
-            text="🎬 JellyDisc", 
+            text="JellyDisk",
             font=ctk.CTkFont(size=32, weight="bold")
         )
         title.pack(pady=(0, 5))
@@ -404,52 +406,66 @@ class JellyDiscApp(_BaseClass):
     
     def _create_config_tab(self):
         """Create the Authoring Config tab."""
-        frame = ctk.CTkFrame(self.tab_config)
-        frame.pack(fill="both", expand=True, padx=20, pady=20)
-        
-        # Title
-        title = ctk.CTkLabel(
-            frame,
-            text="Authoring Configuration",
-            font=ctk.CTkFont(size=20, weight="bold")
+        frame = ctk.CTkFrame(self.tab_config, fg_color="transparent")
+        frame.pack(fill="both", expand=True, padx=12, pady=12)
+
+        header = ctk.CTkFrame(frame, fg_color="transparent")
+        header.pack(fill="x", pady=(0, 10))
+        ctk.CTkLabel(
+            header,
+            text="Build your DVD",
+            font=ctk.CTkFont(size=24, weight="bold"),
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            header,
+            text="Choose the format, check the package preview, then continue when it looks right.",
+            font=ctk.CTkFont(size=13),
+            text_color=("gray45", "gray70"),
+        ).pack(anchor="w", pady=(2, 0))
+
+        content = ctk.CTkFrame(frame, fg_color="transparent")
+        content.pack(fill="both", expand=True)
+        content.grid_columnconfigure(0, weight=0, minsize=335)
+        content.grid_columnconfigure(1, weight=1)
+        content.grid_rowconfigure(0, weight=1)
+
+        settings_card = ctk.CTkScrollableFrame(
+            content, label_text="DVD settings", width=320
         )
-        title.pack(pady=(0, 20))
-        
-        # Settings grid
-        settings_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        settings_frame.pack(fill="x", pady=10)
+        settings_card.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        settings_card.grid_columnconfigure(1, weight=1)
         
         # Video Standard
-        std_label = ctk.CTkLabel(settings_frame, text="Video Standard:")
+        std_label = ctk.CTkLabel(settings_card, text="Video standard")
         std_label.grid(row=0, column=0, sticky="e", padx=10, pady=10)
         
         self.standard_var = ctk.StringVar(value="NTSC")
         std_dropdown = ctk.CTkComboBox(
-            settings_frame,
+            settings_card,
             values=["NTSC", "PAL"],
             variable=self.standard_var,
-            width=200
+            width=165
         )
         std_dropdown.grid(row=0, column=1, sticky="w", padx=10, pady=10)
         
         # Audio Language
-        audio_label = ctk.CTkLabel(settings_frame, text="Audio Language:")
+        audio_label = ctk.CTkLabel(settings_card, text="Audio")
         audio_label.grid(row=1, column=0, sticky="e", padx=10, pady=10)
         
         self.audio_var = ctk.StringVar(value="English")
         audio_dropdown = ctk.CTkComboBox(
-            settings_frame,
+            settings_card,
             values=["English", "Spanish", "French", "German", "Japanese", "Korean", "Chinese"],
             variable=self.audio_var,
-            width=200
+            width=165
         )
         audio_dropdown.grid(row=1, column=1, sticky="w", padx=10, pady=10)
         
         # Include Subtitles
         self.subtitles_var = ctk.BooleanVar(value=True)
         subtitles_check = ctk.CTkCheckBox(
-            settings_frame,
-            text="Include Subtitles",
+            settings_card,
+            text="Include subtitles",
             variable=self.subtitles_var
         )
         subtitles_check.grid(row=2, column=1, sticky="w", padx=10, pady=10)
@@ -457,43 +473,43 @@ class JellyDiscApp(_BaseClass):
         # Include Trailer
         self.trailer_var = ctk.BooleanVar(value=True)
         trailer_check = ctk.CTkCheckBox(
-            settings_frame,
-            text="Include Trailer (if available)",
+            settings_card,
+            text="Include trailer when available",
             variable=self.trailer_var
         )
         trailer_check.grid(row=3, column=1, sticky="w", padx=10, pady=10)
         
         # Menu Style
-        style_label = ctk.CTkLabel(settings_frame, text="Menu Style:")
+        style_label = ctk.CTkLabel(settings_card, text="Menu style")
         style_label.grid(row=4, column=0, sticky="e", padx=10, pady=10)
         
         self.style_var = ctk.StringVar(value="Modern")
         style_dropdown = ctk.CTkComboBox(
-            settings_frame,
+            settings_card,
             values=["Modern", "Retro"],
             variable=self.style_var,
-            width=200
+            width=165
         )
         style_dropdown.grid(row=4, column=1, sticky="w", padx=10, pady=10)
         
         # Burn Speed
-        speed_label = ctk.CTkLabel(settings_frame, text="Burn Speed:")
+        speed_label = ctk.CTkLabel(settings_card, text="Burn speed")
         speed_label.grid(row=5, column=0, sticky="e", padx=10, pady=10)
         
         self.speed_var = ctk.StringVar(value="4x")
         speed_dropdown = ctk.CTkComboBox(
-            settings_frame,
+            settings_card,
             values=["1x", "2x", "4x", "8x", "16x"],
             variable=self.speed_var,
-            width=200
+            width=165
         )
         speed_dropdown.grid(row=5, column=1, sticky="w", padx=10, pady=10)
         
         # Generate Printable Cover
         self.cover_art_var = ctk.BooleanVar(value=True)
         cover_art_check = ctk.CTkCheckBox(
-            settings_frame,
-            text="Generate Printable DVD Cover (PDF)",
+            settings_card,
+            text="Printable case cover",
             variable=self.cover_art_var
         )
         cover_art_check.grid(row=6, column=1, sticky="w", padx=10, pady=10)
@@ -501,8 +517,8 @@ class JellyDiscApp(_BaseClass):
         # Generate Printable Folio
         self.folio_var = ctk.BooleanVar(value=True)
         folio_check = ctk.CTkCheckBox(
-            settings_frame,
-            text="Generate Episode Info Booklet (PDF)",
+            settings_card,
+            text="Episode booklet",
             variable=self.folio_var
         )
         folio_check.grid(row=7, column=1, sticky="w", padx=10, pady=10)
@@ -510,22 +526,22 @@ class JellyDiscApp(_BaseClass):
         # Generate Printable Disc Label
         self.disc_label_var = ctk.BooleanVar(value=True)
         disc_label_check = ctk.CTkCheckBox(
-            settings_frame,
-            text="Generate Printable Disc Face Labels (PDF)",
+            settings_card,
+            text="Printable disc label",
             variable=self.disc_label_var
         )
         disc_label_check.grid(row=8, column=1, sticky="w", padx=10, pady=10)
         
         # Disc Size
-        disc_size_label = ctk.CTkLabel(settings_frame, text="Disc Capacity:")
+        disc_size_label = ctk.CTkLabel(settings_card, text="Disc capacity")
         disc_size_label.grid(row=9, column=0, sticky="e", padx=10, pady=10)
         
         self.disc_size_var = ctk.StringVar(value="DVD-5 (4.7 GB)")
         disc_size_dropdown = ctk.CTkComboBox(
-            settings_frame,
+            settings_card,
             values=["DVD-5 (4.7 GB)", "DVD-9 (8.5 GB)"],
             variable=self.disc_size_var,
-            width=200,
+            width=165,
             command=self._on_disc_size_changed
         )
         disc_size_dropdown.grid(row=9, column=1, sticky="w", padx=10, pady=10)
@@ -533,15 +549,79 @@ class JellyDiscApp(_BaseClass):
         # Include Trivia Game
         self.trivia_var = ctk.BooleanVar(value=True)
         trivia_check = ctk.CTkCheckBox(
-            settings_frame,
-            text="Include Interactive Trivia Game",
+            settings_card,
+            text="Interactive trivia game",
             variable=self.trivia_var
         )
         trivia_check.grid(row=10, column=1, sticky="w", padx=10, pady=10)
         
-        # Summary frame
-        self.config_summary = ctk.CTkFrame(frame)
-        self.config_summary.pack(fill="x", pady=20)
+        preview_card = ctk.CTkFrame(content)
+        preview_card.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+
+        preview_header = ctk.CTkFrame(preview_card, fg_color="transparent")
+        preview_header.pack(fill="x", padx=14, pady=(12, 6))
+        ctk.CTkLabel(
+            preview_header,
+            text="Case & disc preview",
+            font=ctk.CTkFont(size=17, weight="bold"),
+        ).pack(side="left")
+        self.refresh_preview_btn = ctk.CTkButton(
+            preview_header,
+            text="Refresh artwork",
+            width=125,
+            height=30,
+            command=self._request_package_preview,
+            state="disabled",
+        )
+        self.refresh_preview_btn.pack(side="right")
+
+        self.preview_label = ctk.CTkLabel(
+            preview_card,
+            text="Select a season to preview its case and disc.",
+            height=350,
+            corner_radius=10,
+            fg_color=("gray88", "gray14"),
+        )
+        self.preview_label.pack(fill="both", expand=True, padx=14, pady=6)
+        self.preview_ctk_image = None
+        self.preview_tk_image = None
+        self.preview_frame_paths = []
+        self.preview_frame_index = 0
+        self.preview_drag_x = None
+        self.preview_drag_origin = None
+        self.preview_documents = {}
+        self.preview_label._label.bind("<ButtonPress-1>", self._on_preview_drag_start)
+        self.preview_label._label.bind("<B1-Motion>", self._on_preview_drag)
+        self.preview_label._label.bind("<ButtonRelease-1>", self._on_preview_click)
+
+        document_buttons = ctk.CTkFrame(preview_card, fg_color="transparent")
+        document_buttons.pack(fill="x", padx=14, pady=(2, 2))
+        self.preview_document_buttons = {}
+        for kind, title in (
+            ("cover", "Case cover"),
+            ("booklet", "Booklet"),
+            ("disc", "Disc label"),
+        ):
+            button = ctk.CTkButton(
+                document_buttons,
+                text=title,
+                height=30,
+                state="disabled",
+                command=lambda selected=kind: self._show_preview_document(selected),
+            )
+            button.pack(side="left", expand=True, fill="x", padx=3)
+            self.preview_document_buttons[kind] = button
+
+        self.preview_status = ctk.CTkLabel(
+            preview_card,
+            text="The preview is generated before any episodes are transcoded.",
+            font=ctk.CTkFont(size=12),
+            text_color=("gray45", "gray70"),
+        )
+        self.preview_status.pack(pady=(4, 8))
+
+        self.config_summary = ctk.CTkFrame(preview_card)
+        self.config_summary.pack(fill="x", padx=14, pady=(0, 10))
         
         self.summary_label = ctk.CTkLabel(
             self.config_summary,
@@ -549,7 +629,16 @@ class JellyDiscApp(_BaseClass):
             font=ctk.CTkFont(size=12),
             text_color="gray"
         )
-        self.summary_label.pack(pady=20)
+        self.summary_label.pack(padx=12, pady=10)
+
+        self.continue_btn = ctk.CTkButton(
+            preview_card,
+            text="Continue to output →",
+            height=40,
+            command=lambda: self.tabview.set("4  Output"),
+            state="disabled",
+        )
+        self.continue_btn.pack(fill="x", padx=14, pady=(0, 14))
     
     def _create_burn_tab(self):
         """Create the Burn tab with progress tracking."""
@@ -559,10 +648,17 @@ class JellyDiscApp(_BaseClass):
         # Title
         title = ctk.CTkLabel(
             frame,
-            text="DVD Authoring & Burning",
-            font=ctk.CTkFont(size=20, weight="bold")
+            text="Create your DVD",
+            font=ctk.CTkFont(size=22, weight="bold")
         )
         title.pack(pady=(0, 10))
+
+        ctk.CTkLabel(
+            frame,
+            text="Choose where the finished disc should go. Nothing starts until you press the button below.",
+            font=ctk.CTkFont(size=12),
+            text_color=("gray45", "gray70"),
+        ).pack(pady=(0, 6))
         
         # Disc info
         self.disc_info_frame = ctk.CTkFrame(frame)
@@ -710,7 +806,7 @@ class JellyDiscApp(_BaseClass):
         
         self.start_btn = ctk.CTkButton(
             button_frame,
-            text="▶ Start",
+            text="Create ISO",
             width=200,
             height=40,
             command=self._on_start,
@@ -814,7 +910,10 @@ class JellyDiscApp(_BaseClass):
                 burner = Burner(self.config.output_dir)
                 
                 def erase_progress(progress: float, status: str):
-                    self.after(0, lambda: self._update_task(status, progress))
+                    self.after(
+                        0,
+                        lambda s=status, p=progress: self._update_task(s, p),
+                    )
                     
                 success = burner.erase_media(
                     device=device,
@@ -899,7 +998,7 @@ class JellyDiscApp(_BaseClass):
         password = self.pass_entry.get()
         
         if not url or not username or not password:
-            self.connect_status.configure(text="Please fill in all fields", text_color="red")
+            self._on_connect_error("Enter the server URL, username, and password.")
             return
         
         self.connect_btn.configure(state="disabled", text="Connecting...")
@@ -921,14 +1020,20 @@ class JellyDiscApp(_BaseClass):
                 self.jellyfin_client = client
                 
                 # Update UI on success
-                self.after(0, lambda: self._on_connect_success(server_name))
+                self.after(
+                    0,
+                    lambda name=server_name: self._on_connect_success(name),
+                )
                 
-            except JellyfinConnectionError as e:
-                self.after(0, lambda: self._on_connect_error(f"Connection failed: {e}"))
-            except AuthenticationError as e:
-                self.after(0, lambda: self._on_connect_error(f"Login failed: {e}"))
-            except Exception as e:
-                self.after(0, lambda: self._on_connect_error(f"Error: {e}"))
+            except JellyfinConnectionError as exc:
+                message = f"Could not reach the server: {exc}"
+                self.after(0, lambda msg=message: self._on_connect_error(msg))
+            except AuthenticationError as exc:
+                message = f"Login failed: {exc}"
+                self.after(0, lambda msg=message: self._on_connect_error(msg))
+            except Exception as exc:
+                message = f"Could not connect: {exc}"
+                self.after(0, lambda msg=message: self._on_connect_error(msg))
         
         threading.Thread(target=connect, daemon=True).start()
     
@@ -947,13 +1052,18 @@ class JellyDiscApp(_BaseClass):
         self._load_tv_shows()
         
         # Switch to library tab
-        self.tabview.set("Library")
+        self.tabview.set("2  Library")
     
     def _on_connect_error(self, message: str):
         """Handle connection error."""
         self.connect_btn.configure(state="normal", text="Connect")
         self.connect_status.configure(text=message, text_color="red")
         self._log(f"✗ {message}")
+        if GUI_AVAILABLE:
+            try:
+                messagebox.showerror("Jellyfin connection", message, parent=self)
+            except Exception:
+                pass
     
     def _load_tv_shows(self):
         """Load TV shows from Jellyfin."""
@@ -965,9 +1075,12 @@ class JellyDiscApp(_BaseClass):
         def load():
             try:
                 shows = self.jellyfin_client.get_tv_shows()
-                self.after(0, lambda: self._populate_shows(shows))
+                self.after(0, lambda items=shows: self._populate_shows(items))
             except Exception as e:
-                self.after(0, lambda ex=e: self._log(f"Error loading shows: {ex}"))
+                self.after(
+                    0,
+                    lambda ex=e: self._show_library_error("load the library", ex),
+                )
         
         threading.Thread(target=load, daemon=True).start()
     
@@ -981,7 +1094,10 @@ class JellyDiscApp(_BaseClass):
     def _on_search_changed(self, *args):
         """Called when search text changes (debounced search)."""
         if hasattr(self, "_search_timer_id") and self._search_timer_id:
-            self.after_cancel(self._search_timer_id)
+            try:
+                self.after_cancel(self._search_timer_id)
+            except Exception:
+                pass
             
         self._search_timer_id = self.after(400, self._perform_server_search)
 
@@ -1002,13 +1118,19 @@ class JellyDiscApp(_BaseClass):
         def run_search():
             try:
                 results = self.jellyfin_client.search_library(query)
-                # Verify the query hasn't changed since this thread started
-                if self.search_var.get().strip() == query:
-                    self.after(0, lambda: self._populate_search_results(results, query))
+                self.after(
+                    0,
+                    lambda: self._apply_search_results_if_current(results, query),
+                )
             except Exception as e:
                 self.after(0, lambda ex=e: self._log(f"Search error: {ex}"))
                 
         threading.Thread(target=run_search, daemon=True).start()
+
+    def _apply_search_results_if_current(self, results, query):
+        """Apply server search results only if the UI query still matches."""
+        if self.search_var.get().strip() == query:
+            self._populate_search_results(results, query)
 
     def _populate_search_results(self, results: list[Series], query: str):
         """Populate the shows sidebar with search results."""
@@ -1036,7 +1158,19 @@ class JellyDiscApp(_BaseClass):
     def _on_show_selected(self, series: Series):
         """Handle show selection."""
         self.selected_series = series
+        self.selected_season = None
+        self.disc_plans = []
         self.season_label.configure(text=series.name)
+        self.season_dropdown.configure(values=[], state="disabled")
+        self.season_var.set("Loading seasons…")
+        self.select_season_btn.configure(state="disabled")
+        self.start_btn.configure(state="disabled")
+        self.continue_btn.configure(state="disabled")
+        self.refresh_preview_btn.configure(state="disabled")
+        self.preview_frame_paths = []
+        self._clear_package_preview_image("Choose a season to build its preview.")
+        for widget in self.episodes_frame.winfo_children():
+            widget.destroy()
         
         # Load seasons and detailed metadata
         if not self.jellyfin_client:
@@ -1056,14 +1190,22 @@ class JellyDiscApp(_BaseClass):
                 
                 # Fetch seasons list
                 seasons = self.jellyfin_client.get_seasons(series.id)
-                self.after(0, lambda: self._populate_seasons(seasons))
+                self.after(
+                    0,
+                    lambda: self._populate_seasons(seasons, series.id),
+                )
             except Exception as e:
-                self.after(0, lambda ex=e: self._log(f"Error loading seasons: {ex}"))
+                self.after(
+                    0,
+                    lambda ex=e: self._show_library_error("load seasons", ex),
+                )
         
         threading.Thread(target=load, daemon=True).start()
     
-    def _populate_seasons(self, seasons: list[Season]):
+    def _populate_seasons(self, seasons: list[Season], series_id: str):
         """Populate the seasons dropdown."""
+        if not self.selected_series or self.selected_series.id != series_id:
+            return
         self.seasons_data = {s.name: s for s in seasons}
         
         season_names = [s.name for s in seasons]
@@ -1082,28 +1224,54 @@ class JellyDiscApp(_BaseClass):
         
         season = self.seasons_data[season_name]
         self.selected_season = season
+        series = self.selected_series
         
         # Load episodes
-        if not self.jellyfin_client or not self.selected_series:
+        if not self.jellyfin_client or not series:
             return
         
         self._set_status(f"Loading episodes...")
+        self.select_season_btn.configure(state="disabled")
+        for widget in self.episodes_frame.winfo_children():
+            widget.destroy()
+        ctk.CTkLabel(
+            self.episodes_frame,
+            text="Loading episodes…",
+            text_color=("gray45", "gray70"),
+        ).pack(pady=24)
         
         def load():
             try:
                 episodes = self.jellyfin_client.get_episodes(
-                    self.selected_series.id, 
+                    series.id,
                     season.id
                 )
                 season.episodes = episodes
-                self.after(0, lambda: self._populate_episodes(episodes))
+                self.after(
+                    0,
+                    lambda: self._populate_episodes(
+                        episodes, series.id, season.id
+                    ),
+                )
             except Exception as e:
-                self.after(0, lambda ex=e: self._log(f"Error loading episodes: {ex}"))
+                self.after(
+                    0,
+                    lambda ex=e: self._show_library_error("load episodes", ex),
+                )
         
         threading.Thread(target=load, daemon=True).start()
     
-    def _populate_episodes(self, episodes: list[Episode]):
+    def _populate_episodes(
+        self, episodes: list[Episode], series_id: str, season_id: str
+    ):
         """Populate the episodes list."""
+        if (
+            not self.selected_series
+            or not self.selected_season
+            or self.selected_series.id != series_id
+            or self.selected_season.id != season_id
+        ):
+            return
         # Clear existing
         for widget in self.episodes_frame.winfo_children():
             widget.destroy()
@@ -1121,6 +1289,17 @@ class JellyDiscApp(_BaseClass):
         
         self.select_season_btn.configure(state="normal")
         self._set_status(f"Found {len(episodes)} episodes")
+
+    def _show_library_error(self, action: str, error):
+        message = f"Could not {action}: {error}"
+        self._set_status(message)
+        self._log(f"✗ {message}")
+        self.select_season_btn.configure(state="disabled")
+        if GUI_AVAILABLE:
+            try:
+                messagebox.showerror("Jellyfin library", message, parent=self)
+            except Exception:
+                pass
     
     def _on_author_season(self):
         """Handle author season button click."""
@@ -1143,7 +1322,7 @@ class JellyDiscApp(_BaseClass):
         self._create_disc_plan()
         
         # Switch to config tab
-        self.tabview.set("Authoring")
+        self.tabview.set("3  Preview")
     
     @property
     def current_staging_dir(self) -> Path:
@@ -1156,6 +1335,288 @@ class JellyDiscApp(_BaseClass):
         folder = self.config.staging_dir / series_folder / season_folder
         folder.mkdir(parents=True, exist_ok=True)
         return folder
+
+    def _request_package_preview(self):
+        """Download lightweight artwork and render the pre-build package preview."""
+        if not self.selected_series or not self.selected_season or not self.jellyfin_client:
+            return
+
+        series = self.selected_series
+        season = self.selected_season
+        client = self.jellyfin_client
+        series_id = series.id
+        season_id = season.id
+        disc_count = max(1, len(self.disc_plans))
+        dvd_capacity_mb = 7900 if "DVD-9" in self.disc_size_var.get() else 4100
+        preview_dir = self.current_staging_dir / "preview"
+        preview_dir.mkdir(parents=True, exist_ok=True)
+
+        self.refresh_preview_btn.configure(state="disabled")
+        self.preview_frame_paths = []
+        self.preview_documents = {}
+        for button in self.preview_document_buttons.values():
+            button.configure(state="disabled")
+        self._clear_package_preview_image("Loading artwork…")
+        self.preview_status.configure(text="Building a preview from Jellyfin artwork…")
+
+        def download_optional(url, path):
+            if not url:
+                return None
+            try:
+                client.download_image(url, path)
+                return path
+            except Exception as exc:
+                logger.warning(f"Preview artwork download failed for {url}: {exc}")
+                return None
+
+        def build():
+            try:
+                poster_path = download_optional(
+                    season.primary_image_url, preview_dir / "poster.jpg"
+                )
+                backdrop_path = download_optional(
+                    series.backdrop_image_url, preview_dir / "backdrop.jpg"
+                )
+                logo_path = download_optional(
+                    series.logo_image_url, preview_dir / "logo.png"
+                )
+                for episode in season.episodes:
+                    download_optional(
+                        episode.primary_image_url,
+                        preview_dir / f"ep_{episode.index_number}_thumb.jpg",
+                    )
+
+                art_gen = ArtGenerator(preview_dir)
+                cover_pdf = preview_dir / "case-cover.pdf"
+                cover_png = preview_dir / "case-cover.png"
+                booklet_pdf = preview_dir / "episode-booklet.pdf"
+                booklet_png = preview_dir / "episode-booklet.png"
+                disc_pdf = preview_dir / "disc-label.pdf"
+                disc_png = preview_dir / "disc-label.png"
+                common = {
+                    "series_name": series.name,
+                    "season_name": season.name,
+                    "overview": season.overview or series.overview or "",
+                    "episodes": season.episodes,
+                    "backdrop_path": backdrop_path,
+                    "logo_path": logo_path,
+                }
+                art_gen.generate_dvd_wrap(
+                    **common,
+                    season_poster_path=poster_path,
+                    output_path=cover_pdf,
+                    actors=getattr(series, "actors", []),
+                    directors=getattr(series, "directors", []),
+                    writers=getattr(series, "writers", []),
+                    dvd_capacity_mb=dvd_capacity_mb,
+                    preview_path=cover_png,
+                )
+                art_gen.generate_episode_folio(
+                    **common,
+                    output_path=booklet_pdf,
+                    actors=getattr(series, "actors", []),
+                    directors=getattr(series, "directors", []),
+                    writers=getattr(series, "writers", []),
+                    preview_path=booklet_png,
+                )
+                art_gen.generate_disc_label(
+                    series_name=series.name,
+                    season_name=season.name,
+                    disc_num=1,
+                    total_discs=disc_count,
+                    episodes=season.episodes,
+                    backdrop_path=backdrop_path,
+                    logo_path=logo_path,
+                    output_path=disc_pdf,
+                    preview_path=disc_png,
+                )
+                documents = {
+                    "cover": (cover_pdf, cover_png),
+                    "booklet": (booklet_pdf, booklet_png),
+                    "disc": (disc_pdf, disc_png),
+                }
+                frame_paths = []
+                renderer = DVDPreviewRenderer()
+                for angle in (-60, -40, -20, 0, 20, 40, 60):
+                    output_path = preview_dir / f"package-preview-{angle:+03d}.png"
+                    renderer.render_open_case(
+                        output_path=output_path,
+                        series_name=series.name,
+                        season_name=season.name,
+                        cover_preview_path=cover_png,
+                        booklet_preview_path=booklet_png,
+                        disc_preview_path=disc_png,
+                        backdrop_path=backdrop_path,
+                        case_angle=angle,
+                    )
+                    frame_paths.append(output_path)
+                self.after(
+                    0,
+                    lambda: self._show_package_preview(
+                        frame_paths, 3, documents, series_id, season_id
+                    ),
+                )
+            except Exception as exc:
+                logger.exception("Could not generate package preview")
+                self.after(
+                    0,
+                    lambda error=exc: self._show_package_preview_error(
+                        error, series_id, season_id
+                    ),
+                )
+
+        threading.Thread(target=build, daemon=True).start()
+
+    def _show_package_preview(
+        self,
+        frame_paths: list[Path],
+        frame_index: int,
+        documents: dict,
+        series_id: str,
+        season_id: str,
+    ):
+        """Display a completed preview if the user has not changed selections."""
+        if (
+            not self.selected_series
+            or not self.selected_season
+            or self.selected_series.id != series_id
+            or self.selected_season.id != season_id
+        ):
+            return
+        self.preview_frame_paths = frame_paths
+        self.preview_frame_index = frame_index
+        self.preview_documents = documents
+        for kind, button in self.preview_document_buttons.items():
+            button.configure(state="normal" if kind in documents else "disabled")
+        self._display_package_preview_frame()
+        self.preview_status.configure(
+            text="Drag to rotate. Click a part to inspect its printable PDF."
+        )
+        self.refresh_preview_btn.configure(state="normal")
+
+    def _display_package_preview_frame(self):
+        if not self.preview_frame_paths:
+            return
+        try:
+            path = self.preview_frame_paths[self.preview_frame_index]
+            with Image.open(path) as source:
+                image = source.convert("RGB").resize(
+                    (620, 360), Image.Resampling.LANCZOS
+                )
+            # Explicitly bind the PhotoImage to this label's Tcl interpreter.
+            # This avoids Python 3.14/Tk resolving it against a stale default
+            # root and later raising: image "pyimageN" does not exist.
+            self._clear_package_preview_image("")
+            self.preview_tk_image = ImageTk.PhotoImage(
+                image, master=self.preview_label._label
+            )
+            self.preview_label._label.configure(image=self.preview_tk_image, text="")
+        except Exception as exc:
+            self._show_package_preview_error(exc)
+
+    def _on_preview_drag_start(self, event):
+        self.preview_drag_x = event.x
+        self.preview_drag_origin = (event.x, event.y)
+
+    def _on_preview_drag(self, event):
+        if self.preview_drag_x is None or not self.preview_frame_paths:
+            return
+        delta = event.x - self.preview_drag_x
+        if abs(delta) < 28:
+            return
+        step = 1 if delta > 0 else -1
+        next_index = max(
+            0,
+            min(len(self.preview_frame_paths) - 1, self.preview_frame_index + step),
+        )
+        self.preview_drag_x = event.x
+        if next_index != self.preview_frame_index:
+            self.preview_frame_index = next_index
+            self._display_package_preview_frame()
+
+    def _on_preview_click(self, event):
+        origin = self.preview_drag_origin
+        self.preview_drag_x = None
+        self.preview_drag_origin = None
+        if not origin or abs(event.x - origin[0]) > 8 or abs(event.y - origin[1]) > 8:
+            return
+        # The open-case model is consistently laid out as booklet-left/disc-right.
+        if event.y > 315 or event.x < 55 or event.x > 585:
+            kind = "cover"
+        elif event.x < 310:
+            kind = "booklet"
+        else:
+            kind = "disc"
+        self._show_preview_document(kind)
+
+    def _show_preview_document(self, kind: str):
+        document = self.preview_documents.get(kind)
+        if not document:
+            return
+        pdf_path, image_path = document
+        titles = {
+            "cover": "Printable case cover",
+            "booklet": "Episode booklet",
+            "disc": "Printable disc label",
+        }
+        try:
+            window = ctk.CTkToplevel(self)
+            window.title(titles.get(kind, "Print preview"))
+            window.geometry("760x700")
+            window.minsize(560, 520)
+            window.transient(self)
+            with Image.open(image_path) as source:
+                image = source.convert("RGB")
+                image.thumbnail((700, 590), Image.Resampling.LANCZOS)
+            label = ctk.CTkLabel(window, text="", fg_color=("gray88", "gray14"))
+            label.pack(fill="both", expand=True, padx=18, pady=(18, 10))
+            photo = ImageTk.PhotoImage(image, master=label._label)
+            label._label.configure(image=photo, text="")
+            label._preview_photo = photo
+            ctk.CTkButton(
+                window,
+                text="Open PDF",
+                command=lambda path=pdf_path: webbrowser.open(path.resolve().as_uri()),
+            ).pack(pady=(0, 18))
+            window.lift()
+        except Exception as exc:
+            messagebox.showerror(
+                "Print preview",
+                f"Could not open the {kind} preview: {exc}",
+                parent=self,
+            )
+
+    def _clear_package_preview_image(self, text: str):
+        """Clear the Tk image before changing label text or loading a replacement."""
+        try:
+            self.preview_label._label.configure(image="", text=text)
+        except Exception:
+            self.preview_label.configure(text=text)
+        self.preview_tk_image = None
+        self.preview_ctk_image = None
+
+    def _show_package_preview_error(
+        self,
+        error,
+        series_id: Optional[str] = None,
+        season_id: Optional[str] = None,
+    ):
+        if series_id is not None and (
+            not self.selected_series
+            or not self.selected_season
+            or self.selected_series.id != series_id
+            or self.selected_season.id != season_id
+        ):
+            return
+        self._clear_package_preview_image(
+            "Preview unavailable\nYou can still continue with authoring."
+        )
+        self.preview_status.configure(text=f"Could not build preview: {error}")
+        self.preview_frame_paths = []
+        self.preview_documents = {}
+        for button in self.preview_document_buttons.values():
+            button.configure(state="disabled")
+        self.refresh_preview_btn.configure(state="normal")
 
     def _on_disc_size_changed(self, value):
         if value == "DVD-9 (8.5 GB)":
@@ -1236,6 +1697,9 @@ class JellyDiscApp(_BaseClass):
             
             # Enable start button
             self.start_btn.configure(state="normal")
+            self.continue_btn.configure(state="normal")
+            self.refresh_preview_btn.configure(state="normal")
+            self._request_package_preview()
             
             self._log(f"✓ Disc plan created: {num_discs} disc(s) required")
             
@@ -1247,13 +1711,14 @@ class JellyDiscApp(_BaseClass):
         if not self.disc_plans or not self.selected_season or not self.selected_series:
             return
         
+        settings = self._snapshot_authoring_settings()
         self.start_btn.configure(state="disabled")
         
         def process():
             try:
-                self._run_authoring_pipeline(burn=False)
+                self._run_authoring_pipeline(burn=False, settings=settings)
             except Exception as e:
-                self.after(0, lambda ex=e: self._log(f"Error: {ex}"))
+                self.after(0, lambda ex=e: self._show_pipeline_error(ex))
             finally:
                 self.after(0, lambda: self.start_btn.configure(state="normal"))
         
@@ -1274,34 +1739,77 @@ class JellyDiscApp(_BaseClass):
         # Check drive selection
         drive = self.drive_var.get()
         if "No drives" in drive:
-            self._log("⚠️ No DVD drive selected. Please select a drive or use Save ISO mode.")
+            message = "No DVD drive is selected. Choose a drive or use Save ISO mode."
+            self._log(f"⚠️ {message}")
+            if GUI_AVAILABLE:
+                messagebox.showwarning("DVD drive", message, parent=self)
             return
         
+        settings = self._snapshot_authoring_settings()
         self.start_btn.configure(state="disabled")
         
         def process():
             try:
-                self._run_authoring_pipeline(burn=True)
+                self._run_authoring_pipeline(burn=True, settings=settings)
             except Exception as e:
-                self.after(0, lambda ex=e: self._log(f"Error: {ex}"))
+                self.after(0, lambda ex=e: self._show_pipeline_error(ex))
             finally:
                 self.after(0, lambda: self.start_btn.configure(state="normal"))
         
         threading.Thread(target=process, daemon=True).start()
+
+    def _show_pipeline_error(self, error):
+        message = str(error)
+        self._log(f"✗ Authoring failed: {message}")
+        self.task_status.configure(text="Authoring failed")
+        if GUI_AVAILABLE:
+            try:
+                messagebox.showerror("DVD authoring failed", message, parent=self)
+            except Exception:
+                pass
+
+    def _snapshot_authoring_settings(self) -> dict:
+        """Read every Tk-backed build option on the UI thread."""
+        return {
+            "video_standard": (
+                VideoStandard.NTSC
+                if self.standard_var.get() == "NTSC"
+                else VideoStandard.PAL
+            ),
+            "menu_style": (
+                MenuStyle.MODERN
+                if self.style_var.get() == "Modern"
+                else MenuStyle.RETRO
+            ),
+            "include_subs": self.subtitles_var.get(),
+            "include_trailer": self.trailer_var.get(),
+            "include_trivia": self.trivia_var.get(),
+            "dvd_capacity_mb": (
+                7900 if "DVD-9" in self.disc_size_var.get() else 4100
+            ),
+            "iso_path": self.iso_path_var.get(),
+            "generate_cover": self.cover_art_var.get(),
+            "generate_folio": self.folio_var.get(),
+            "generate_labels": self.disc_label_var.get(),
+            "drive": self.drive_var.get(),
+            "burn_speed": int(self.speed_var.get().replace("x", "")),
+        }
     
-    def _run_authoring_pipeline(self, burn: bool = False):
+    def _run_authoring_pipeline(
+        self, burn: bool = False, settings: Optional[dict] = None
+    ):
         """Run the full DVD authoring pipeline."""
         self._update_task("Initializing...", 0)
         self._update_overall(0)
         
-        # Get settings
-        video_standard = VideoStandard.NTSC if self.standard_var.get() == "NTSC" else VideoStandard.PAL
-        menu_style = MenuStyle.MODERN if self.style_var.get() == "Modern" else MenuStyle.RETRO
-        include_subs = self.subtitles_var.get()
-        include_trailer = self.trailer_var.get()
-        include_trivia = self.trivia_var.get()
-        
-        dvd_capacity_mb = 7900 if "DVD-9" in self.disc_size_var.get() else 4100
+        if settings is None:
+            raise RuntimeError("Authoring settings were not captured from the GUI.")
+        video_standard = settings["video_standard"]
+        menu_style = settings["menu_style"]
+        include_subs = settings["include_subs"]
+        include_trailer = settings["include_trailer"]
+        include_trivia = settings["include_trivia"]
+        dvd_capacity_mb = settings["dvd_capacity_mb"]
         
         # Initialize components
         transcoder = Transcoder(
@@ -1900,7 +2408,7 @@ class JellyDiscApp(_BaseClass):
             # Determine ISO output path
             # Use user-selected path for single-disc projects (both ISO and Burn modes use this path)
             if len(self.disc_plans) == 1:
-                user_iso_path = self.iso_path_var.get()
+                user_iso_path = settings["iso_path"]
                 if user_iso_path and Path(user_iso_path).suffix.lower() == '.iso':
                     iso_path = Path(user_iso_path)
                 else:
@@ -1916,7 +2424,12 @@ class JellyDiscApp(_BaseClass):
                 iso_path = self.config.output_dir / iso_name
             
             def iso_progress(progress: float, status: str):
-                self.after(0, lambda: self._update_task(f"Disc {disc_num}: {status}", 0.8 + progress * 0.2))
+                self.after(
+                    0,
+                    lambda d=disc_num, s=status, p=progress: self._update_task(
+                        f"Disc {d}: {s}", 0.8 + p * 0.2
+                    ),
+                )
             
             try:
                 iso_path = burner.create_iso(
@@ -1934,9 +2447,9 @@ class JellyDiscApp(_BaseClass):
             self._update_overall(disc_num / len(self.disc_plans))
         
         # Generate printable cover art and/or booklet guide if selected
-        generate_cover = self.cover_art_var.get()
-        generate_folio = self.folio_var.get()
-        generate_labels = self.disc_label_var.get()
+        generate_cover = settings["generate_cover"]
+        generate_folio = settings["generate_folio"]
+        generate_labels = settings["generate_labels"]
         
         if (generate_cover or generate_folio or generate_labels) and self.selected_series and self.selected_season:
             self._update_task("Generating printable artwork PDFs...", 0.9)
@@ -2026,7 +2539,7 @@ class JellyDiscApp(_BaseClass):
             self._update_task("Burning to disc...", 0)
             
             # Get selected drive - extract device path from format "device_name (device_path)"
-            drive_str = self.drive_var.get()
+            drive_str = settings["drive"]
             device = None
             import re
             match = re.search(r'\(([^)]+)\)$', drive_str)
@@ -2034,13 +2547,18 @@ class JellyDiscApp(_BaseClass):
                 device = match.group(1)
             
             def burn_progress(disc: int, total: int, progress: float, status: str):
-                self.after(0, lambda: self._update_task(f"Disc {disc}/{total}: {status}", progress))
+                self.after(
+                    0,
+                    lambda d=disc, t=total, p=progress, s=status: self._update_task(
+                        f"Disc {d}/{t}: {s}", p
+                    ),
+                )
             
             try:
                 success = burner.burn_multi_disc(
                     iso_files,
                     device=device,
-                    speed=int(self.speed_var.get().replace('x', '')),
+                    speed=settings["burn_speed"],
                     progress_callback=burn_progress
                 )
                 
@@ -2063,12 +2581,12 @@ class JellyDiscApp(_BaseClass):
     
     def _update_task(self, status: str, progress: float):
         """Update task progress display."""
-        self.after(0, lambda: self.task_status.configure(text=status))
-        self.after(0, lambda: self.task_progress.set(progress))
+        self.after(0, lambda s=status: self.task_status.configure(text=s))
+        self.after(0, lambda p=progress: self.task_progress.set(p))
     
     def _update_overall(self, progress: float):
         """Update overall progress display."""
-        self.after(0, lambda: self.overall_progress.set(progress))
+        self.after(0, lambda p=progress: self.overall_progress.set(p))
     
     def _set_status(self, message: str):
         """Update the status bar."""
