@@ -42,7 +42,8 @@ Sample print files:
 ## Features
 
 - Browse shows, movies, and seasons from Jellyfin.
-- Preview the DVD case and printed disc before starting a build.
+- Inspect the case, booklet, and disc before starting a build.
+- Try the finished menu layout, navigation, music, trivia, and episode links.
 - Create episode menus, cast pages, subtitle controls, and optional trivia.
 - Fit a season to DVD-5 or DVD-9 and split it across discs when needed.
 - Export an ISO or burn directly on supported systems.

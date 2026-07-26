@@ -9,6 +9,7 @@ interactive menus, metadata, and subtitles.
 
 import logging
 import os
+import subprocess
 import sys
 import threading
 import webbrowser
@@ -67,7 +68,8 @@ from .menu_builder import (
     MenuBuilder,
     MenuConfig,
     MenuStyle,
-    EpisodeThumbnail
+    EpisodeThumbnail,
+    generate_trivia_questions,
 )
 from .burner import (
     Burner,
@@ -96,6 +98,15 @@ def sanitize_filename(name: str, max_length: int = 200) -> str:
     safe = " ".join(safe.split())
     # Truncate if needed
     return safe[:max_length].strip()
+
+
+def select_preview_menu_audio(screen: str, assets: dict) -> Optional[Path]:
+    """Return the authored audio source associated with a preview menu."""
+    if screen.startswith("trivia:"):
+        return assets.get("_trivia_audio_path")
+    if screen == "main":
+        return assets.get("_theme_path")
+    return None
 
 
 def ensure_default_trivia_audio(assets_dir: Path, log_callback=None) -> Optional[Path]:
@@ -184,6 +195,111 @@ else:
     _BaseClass = object
 
 
+if GUI_AVAILABLE:
+    class WorkspaceNavigator(ctk.CTkFrame):
+        """Sidebar workspace navigation with a stable tab-like API."""
+
+        PAGE_DETAILS = {
+            "1  Connect": ("Connection", "Connect securely to your Jellyfin server"),
+            "2  Library": ("Library", "Choose a movie or television season"),
+            "3  Preview": ("Design & preview", "Review the package and test the DVD experience"),
+            "4  Output": ("Build & output", "Create an ISO or burn the finished disc"),
+        }
+
+        def __init__(self, master):
+            super().__init__(master, fg_color="transparent")
+            self.pages = {}
+            self.buttons = {}
+            self.current = None
+            self.grid_columnconfigure(1, weight=1)
+            self.grid_rowconfigure(0, weight=1)
+
+            sidebar = ctk.CTkFrame(self, width=210, corner_radius=0)
+            sidebar.grid(row=0, column=0, sticky="nsew")
+            sidebar.grid_propagate(False)
+            logo_label = ctk.CTkLabel(sidebar, text="")
+            logo_label.pack(anchor="w", padx=20, pady=(24, 3))
+            logo_path = Path(__file__).resolve().parent.parent / "docs" / "jellydisk-logo.png"
+            try:
+                with Image.open(logo_path) as source:
+                    logo = source.convert("RGB")
+                    logo.thumbnail((166, 56), Image.Resampling.LANCZOS)
+                self.logo_photo = ImageTk.PhotoImage(
+                    logo, master=logo_label._label
+                )
+                logo_label._label.configure(image=self.logo_photo, text="")
+            except Exception:
+                logo_label.configure(
+                    text="JellyDisk",
+                    font=ctk.CTkFont(size=25, weight="bold"),
+                )
+            ctk.CTkLabel(
+                sidebar,
+                text="DVD authoring studio",
+                font=ctk.CTkFont(size=12),
+                text_color=("gray45", "gray65"),
+            ).pack(anchor="w", padx=22, pady=(0, 28))
+            self.nav_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
+            self.nav_frame.pack(fill="x", padx=10)
+            ctk.CTkLabel(
+                sidebar,
+                text="PROJECT WORKFLOW",
+                font=ctk.CTkFont(size=10, weight="bold"),
+                text_color=("gray50", "gray58"),
+            ).place(x=22, rely=0.93, anchor="sw")
+
+            workspace = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
+            workspace.grid(row=0, column=1, sticky="nsew", padx=(20, 22), pady=(16, 0))
+            self.page_title = ctk.CTkLabel(
+                workspace, text="", font=ctk.CTkFont(size=27, weight="bold")
+            )
+            self.page_title.pack(anchor="w")
+            self.page_subtitle = ctk.CTkLabel(
+                workspace,
+                text="",
+                font=ctk.CTkFont(size=12),
+                text_color=("gray45", "gray68"),
+            )
+            self.page_subtitle.pack(anchor="w", pady=(1, 12))
+            self.page_host = ctk.CTkFrame(workspace, fg_color="transparent")
+            self.page_host.pack(fill="both", expand=True)
+
+        def add(self, name: str):
+            page = ctk.CTkFrame(self.page_host, fg_color="transparent")
+            self.pages[name] = page
+            number, label = name.split("  ", 1)
+            button = ctk.CTkButton(
+                self.nav_frame,
+                text=f"{number}    {label}",
+                height=44,
+                anchor="w",
+                fg_color="transparent",
+                hover_color=("gray82", "gray22"),
+                command=lambda target=name: self.set(target),
+            )
+            button.pack(fill="x", pady=3)
+            self.buttons[name] = button
+            if self.current is None:
+                self.set(name)
+            return page
+
+        def set(self, name: str):
+            if name not in self.pages:
+                return
+            if self.current:
+                self.pages[self.current].pack_forget()
+                self.buttons[self.current].configure(fg_color="transparent")
+            self.current = name
+            self.pages[name].pack(fill="both", expand=True)
+            self.buttons[name].configure(fg_color=("gray78", "gray25"))
+            title, subtitle = self.PAGE_DETAILS.get(name, (name, ""))
+            self.page_title.configure(text=title)
+            self.page_subtitle.configure(text=subtitle)
+
+        def get(self):
+            return self.current
+
+
 @dataclass
 class AppConfig:
     """Application configuration."""
@@ -210,8 +326,8 @@ class JellyDiscApp(_BaseClass):
         super().__init__()
         
         self.title("JellyDisk")
-        self.geometry("1180x820")
-        self.minsize(980, 720)
+        self.geometry("1320x860")
+        self.minsize(1080, 740)
         
         # Application state
         self.config = AppConfig()
@@ -230,12 +346,18 @@ class JellyDiscApp(_BaseClass):
         
         # Check dependencies on startup
         self.after(100, self._check_dependencies)
+
+    def destroy(self):
+        """Release preview media processes before closing the application."""
+        if hasattr(self, "menu_audio_process"):
+            self._stop_menu_audio()
+        super().destroy()
     
     def _create_ui(self):
         """Create the main UI layout."""
-        # Create tab view
-        self.tabview = ctk.CTkTabview(self)
-        self.tabview.pack(fill="both", expand=True, padx=10, pady=10)
+        # A project workspace replaces the old stack of conventional tabs.
+        self.tabview = WorkspaceNavigator(self)
+        self.tabview.pack(fill="both", expand=True)
         
         # Add tabs
         self.tab_connect = self.tabview.add("1  Connect")
@@ -251,7 +373,7 @@ class JellyDiscApp(_BaseClass):
         
         # Status bar
         self.status_frame = ctk.CTkFrame(self, height=30)
-        self.status_frame.pack(fill="x", padx=10, pady=(0, 10))
+        self.status_frame.pack(fill="x", padx=(230, 22), pady=(4, 12))
         
         self.status_label = ctk.CTkLabel(
             self.status_frame, 
@@ -269,13 +391,21 @@ class JellyDiscApp(_BaseClass):
         center_frame = ctk.CTkFrame(frame, fg_color="transparent")
         center_frame.place(relx=0.5, rely=0.5, anchor="center")
         
-        # Title
-        title = ctk.CTkLabel(
-            center_frame, 
-            text="JellyDisk",
-            font=ctk.CTkFont(size=32, weight="bold")
-        )
-        title.pack(pady=(0, 5))
+        logo_label = ctk.CTkLabel(center_frame, text="")
+        logo_label.pack(pady=(0, 8))
+        try:
+            logo_path = Path(__file__).resolve().parent.parent / "docs" / "jellydisk-logo.png"
+            with Image.open(logo_path) as source:
+                logo = source.convert("RGB")
+                logo.thumbnail((300, 100), Image.Resampling.LANCZOS)
+            self.connect_logo_photo = ImageTk.PhotoImage(
+                logo, master=logo_label._label
+            )
+            logo_label._label.configure(image=self.connect_logo_photo, text="")
+        except Exception:
+            logo_label.configure(
+                text="JellyDisk", font=ctk.CTkFont(size=32, weight="bold")
+            )
         
         subtitle = ctk.CTkLabel(
             center_frame,
@@ -407,21 +537,7 @@ class JellyDiscApp(_BaseClass):
     def _create_config_tab(self):
         """Create the Authoring Config tab."""
         frame = ctk.CTkFrame(self.tab_config, fg_color="transparent")
-        frame.pack(fill="both", expand=True, padx=12, pady=12)
-
-        header = ctk.CTkFrame(frame, fg_color="transparent")
-        header.pack(fill="x", pady=(0, 10))
-        ctk.CTkLabel(
-            header,
-            text="Build your DVD",
-            font=ctk.CTkFont(size=24, weight="bold"),
-        ).pack(anchor="w")
-        ctk.CTkLabel(
-            header,
-            text="Choose the format, check the package preview, then continue when it looks right.",
-            font=ctk.CTkFont(size=13),
-            text_color=("gray45", "gray70"),
-        ).pack(anchor="w", pady=(2, 0))
+        frame.pack(fill="both", expand=True)
 
         content = ctk.CTkFrame(frame, fg_color="transparent")
         content.pack(fill="both", expand=True)
@@ -562,7 +678,7 @@ class JellyDiscApp(_BaseClass):
         preview_header.pack(fill="x", padx=14, pady=(12, 6))
         ctk.CTkLabel(
             preview_header,
-            text="Case & disc preview",
+            text="Live preview",
             font=ctk.CTkFont(size=17, weight="bold"),
         ).pack(side="left")
         self.refresh_preview_btn = ctk.CTkButton(
@@ -574,6 +690,15 @@ class JellyDiscApp(_BaseClass):
             state="disabled",
         )
         self.refresh_preview_btn.pack(side="right")
+
+        self.preview_mode = ctk.StringVar(value="Package")
+        self.preview_mode_switch = ctk.CTkSegmentedButton(
+            preview_card,
+            values=["Package", "DVD menu"],
+            variable=self.preview_mode,
+            command=self._on_preview_mode_changed,
+        )
+        self.preview_mode_switch.pack(fill="x", padx=14, pady=(2, 4))
 
         self.preview_label = ctk.CTkLabel(
             preview_card,
@@ -590,12 +715,25 @@ class JellyDiscApp(_BaseClass):
         self.preview_drag_x = None
         self.preview_drag_origin = None
         self.preview_documents = {}
+        self.menu_preview_screens = {}
+        self.menu_preview_screen = "main"
+        self.menu_preview_hover = None
+        self.menu_preview_photo = None
+        self.menu_audio_process = None
+        self.menu_audio_path = None
+        self.menu_audio_muted = False
         self.preview_label._label.bind("<ButtonPress-1>", self._on_preview_drag_start)
         self.preview_label._label.bind("<B1-Motion>", self._on_preview_drag)
         self.preview_label._label.bind("<ButtonRelease-1>", self._on_preview_click)
+        self.preview_label._label.bind("<Motion>", self._on_menu_preview_motion)
+        self.preview_label._label.bind("<Leave>", self._on_menu_preview_leave)
+        self.preview_label._label.bind("<Key>", self._on_menu_preview_key)
+        self.preview_label._label.configure(takefocus=True)
 
-        document_buttons = ctk.CTkFrame(preview_card, fg_color="transparent")
-        document_buttons.pack(fill="x", padx=14, pady=(2, 2))
+        self.document_buttons_frame = ctk.CTkFrame(
+            preview_card, fg_color="transparent"
+        )
+        self.document_buttons_frame.pack(fill="x", padx=14, pady=(2, 2))
         self.preview_document_buttons = {}
         for kind, title in (
             ("cover", "Case cover"),
@@ -603,7 +741,7 @@ class JellyDiscApp(_BaseClass):
             ("disc", "Disc label"),
         ):
             button = ctk.CTkButton(
-                document_buttons,
+                self.document_buttons_frame,
                 text=title,
                 height=30,
                 state="disabled",
@@ -611,6 +749,23 @@ class JellyDiscApp(_BaseClass):
             )
             button.pack(side="left", expand=True, fill="x", padx=3)
             self.preview_document_buttons[kind] = button
+
+        self.menu_preview_controls = ctk.CTkFrame(
+            preview_card, fg_color="transparent"
+        )
+        ctk.CTkButton(
+            self.menu_preview_controls,
+            text="Main menu",
+            height=30,
+            command=lambda: self._go_to_preview_menu("main"),
+        ).pack(side="left", expand=True, fill="x", padx=3)
+        self.menu_sound_btn = ctk.CTkButton(
+            self.menu_preview_controls,
+            text="Menu music on",
+            height=30,
+            command=self._toggle_menu_audio,
+        )
+        self.menu_sound_btn.pack(side="left", expand=True, fill="x", padx=3)
 
         self.preview_status = ctk.CTkLabel(
             preview_card,
@@ -643,22 +798,7 @@ class JellyDiscApp(_BaseClass):
     def _create_burn_tab(self):
         """Create the Burn tab with progress tracking."""
         frame = ctk.CTkFrame(self.tab_burn)
-        frame.pack(fill="both", expand=True, padx=20, pady=10)
-        
-        # Title
-        title = ctk.CTkLabel(
-            frame,
-            text="Create your DVD",
-            font=ctk.CTkFont(size=22, weight="bold")
-        )
-        title.pack(pady=(0, 10))
-
-        ctk.CTkLabel(
-            frame,
-            text="Choose where the finished disc should go. Nothing starts until you press the button below.",
-            font=ctk.CTkFont(size=12),
-            text_color=("gray45", "gray70"),
-        ).pack(pady=(0, 6))
+        frame.pack(fill="both", expand=True)
         
         # Disc info
         self.disc_info_frame = ctk.CTkFrame(frame)
@@ -813,6 +953,17 @@ class JellyDiscApp(_BaseClass):
             state="disabled"
         )
         self.start_btn.pack(side="left", padx=10)
+
+        self.play_finished_btn = ctk.CTkButton(
+            button_frame,
+            text="Test finished DVD",
+            width=170,
+            height=40,
+            command=self._play_finished_dvd,
+            state="disabled",
+        )
+        self.play_finished_btn.pack(side="left", padx=10)
+        self.finished_iso_files = []
         
         # Log output
         log_label = ctk.CTkLabel(frame, text="Log Output:")
@@ -946,6 +1097,32 @@ class JellyDiscApp(_BaseClass):
             self._on_create_iso()
         else:  # Burn to Disc
             self._on_burn()
+
+    def _play_finished_dvd(self):
+        """Open the authored ISO in a DVD-capable player for an exact test."""
+        if not self.finished_iso_files:
+            return
+        iso_path = Path(self.finished_iso_files[0])
+        try:
+            import platform
+            import shutil
+            if platform.system() == "Darwin" and Path("/Applications/VLC.app").exists():
+                subprocess.Popen(["open", "-a", "VLC", str(iso_path)])
+            elif shutil.which("vlc"):
+                subprocess.Popen(["vlc", str(iso_path)])
+            elif shutil.which("mpv"):
+                subprocess.Popen(["mpv", str(iso_path)])
+            else:
+                messagebox.showinfo(
+                    "DVD player required",
+                    "Install VLC to test the finished ISO with its real menus, "
+                    "chapters, subtitles, and encoded video.",
+                    parent=self,
+                )
+        except Exception as exc:
+            messagebox.showerror(
+                "Finished DVD", f"Could not open the DVD player: {exc}", parent=self
+            )
     
     def _check_dependencies(self):
         """Check for required system dependencies."""
@@ -1348,12 +1525,15 @@ class JellyDiscApp(_BaseClass):
         season_id = season.id
         disc_count = max(1, len(self.disc_plans))
         dvd_capacity_mb = 7900 if "DVD-9" in self.disc_size_var.get() else 4100
+        selected_menu_style = self.style_var.get()
+        include_trivia_preview = self.trivia_var.get()
         preview_dir = self.current_staging_dir / "preview"
         preview_dir.mkdir(parents=True, exist_ok=True)
 
         self.refresh_preview_btn.configure(state="disabled")
         self.preview_frame_paths = []
         self.preview_documents = {}
+        self.menu_preview_screens = {}
         for button in self.preview_document_buttons.values():
             button.configure(state="disabled")
         self._clear_package_preview_image("Loading artwork…")
@@ -1380,6 +1560,12 @@ class JellyDiscApp(_BaseClass):
                 logo_path = download_optional(
                     series.logo_image_url, preview_dir / "logo.png"
                 )
+                theme_path = None
+                try:
+                    theme_url = client.get_theme_song_url(series.id)
+                    theme_path = download_optional(theme_url, preview_dir / "theme.mp3")
+                except Exception as exc:
+                    logger.warning(f"Preview theme download failed: {exc}")
                 for episode in season.episodes:
                     download_optional(
                         episode.primary_image_url,
@@ -1435,6 +1621,143 @@ class JellyDiscApp(_BaseClass):
                     "booklet": (booklet_pdf, booklet_png),
                     "disc": (disc_pdf, disc_png),
                 }
+                menu_style = (
+                    MenuStyle.RETRO if selected_menu_style == "Retro"
+                    else MenuStyle.MODERN
+                )
+                menu_config = MenuConfig(
+                    style=menu_style,
+                    title=f"{series.name} - {season.name}",
+                    season_overview=season.overview or "",
+                    include_cast=True,
+                    actors=getattr(series, "actors", []),
+                    directors=getattr(series, "directors", []),
+                    writers=getattr(series, "writers", []),
+                    people_details=getattr(series, "people_details", []),
+                )
+                menu_builder = MenuBuilder(preview_dir / "menus", menu_config)
+                questions = []
+                if include_trivia_preview:
+                    questions = generate_trivia_questions(
+                        series.name,
+                        season.name,
+                        getattr(series, "year", ""),
+                        season.episodes,
+                        getattr(series, "actors", []),
+                        getattr(series, "directors", []),
+                        getattr(series, "writers", []),
+                    )
+                main_bg, main_hl, _, main_buttons = menu_builder.generate_main_menu(
+                    backdrop_path,
+                    logo_path,
+                    has_trailer=False,
+                    show_episode_select=len(season.episodes) > 1,
+                    has_trivia=bool(questions),
+                )
+                main_actions = ["play_all"]
+                if len(season.episodes) > 1:
+                    main_actions.append("episodes:0")
+                main_actions.append("cast:0")
+                if questions:
+                    main_actions.append("trivia:0")
+                screens = {
+                    "main": {
+                        "background": main_bg,
+                        "highlight": main_hl,
+                        "buttons": main_buttons,
+                        "actions": main_actions,
+                    }
+                }
+                thumbnails = [
+                    EpisodeThumbnail(
+                        episode_index=episode.index_number,
+                        title=episode.name,
+                        thumbnail_path=preview_dir / f"ep_{episode.index_number}_thumb.jpg",
+                    )
+                    for episode in season.episodes
+                ]
+                total_pages = max(1, (len(thumbnails) + 5) // 6)
+                for page in range(total_pages):
+                    bg, hl, _, buttons = menu_builder.generate_episode_menu(
+                        backdrop_path, logo_path, thumbnails, page, total_pages
+                    )
+                    page_episodes = season.episodes[page * 6:(page + 1) * 6]
+                    actions = [f"episode:{ep.id}" for ep in page_episodes]
+                    if page > 0:
+                        actions.append(f"episodes:{page - 1}")
+                    actions.append("main")
+                    if page < total_pages - 1:
+                        actions.append(f"episodes:{page + 1}")
+                    screens[f"episodes:{page}"] = {
+                        "background": bg,
+                        "highlight": hl,
+                        "buttons": buttons,
+                        "actions": actions,
+                    }
+                cast_pages = menu_builder.generate_cast_menus(
+                    backdrop_path,
+                    logo_path,
+                    overview=series.overview or "",
+                    actors=getattr(series, "actors", []),
+                )
+                for page, (bg, hl, _, buttons) in enumerate(cast_pages):
+                    actions = ["main"]
+                    if page > 0:
+                        actions.append(f"cast:{page - 1}")
+                    if page + 1 < len(cast_pages):
+                        actions.append(f"cast:{page + 1}")
+                    screens[f"cast:{page}"] = {
+                        "background": bg,
+                        "highlight": hl,
+                        "buttons": buttons,
+                        "actions": actions,
+                    }
+                if questions:
+                    trivia_pages, wrong_page, win_page = (
+                        menu_builder.generate_trivia_menus(
+                            questions, backdrop_path, logo_path
+                        )
+                    )
+                    for page, (bg, hl, _, buttons) in enumerate(trivia_pages):
+                        correct = questions[page]["correct_index"]
+                        next_screen = (
+                            f"trivia:{page + 1}"
+                            if page + 1 < len(trivia_pages)
+                            else "trivia:win"
+                        )
+                        actions = [
+                            next_screen if option == correct else "trivia:wrong"
+                            for option in range(4)
+                        ]
+                        actions.append("main")
+                        screens[f"trivia:{page}"] = {
+                            "background": bg,
+                            "highlight": hl,
+                            "buttons": buttons,
+                            "actions": actions,
+                        }
+                    wrong_bg, wrong_hl, _, wrong_buttons = wrong_page
+                    screens["trivia:wrong"] = {
+                        "background": wrong_bg,
+                        "highlight": wrong_hl,
+                        "buttons": wrong_buttons,
+                        "actions": ["trivia:0", "main"],
+                    }
+                    win_bg, win_hl, _, win_buttons = win_page
+                    screens["trivia:win"] = {
+                        "background": win_bg,
+                        "highlight": win_hl,
+                        "buttons": win_buttons,
+                        "actions": ["main"],
+                    }
+                screens["_theme_path"] = theme_path
+                trivia_audio_path = (
+                    Path(__file__).resolve().parent / "resources" / "trivia_bg.mp3"
+                )
+                screens["_trivia_audio_path"] = (
+                    trivia_audio_path if trivia_audio_path.exists() else None
+                )
+                screens["_trivia_questions"] = questions
                 frame_paths = []
                 renderer = DVDPreviewRenderer()
                 for angle in (-60, -40, -20, 0, 20, 40, 60):
@@ -1453,7 +1776,7 @@ class JellyDiscApp(_BaseClass):
                 self.after(
                     0,
                     lambda: self._show_package_preview(
-                        frame_paths, 3, documents, series_id, season_id
+                        frame_paths, 3, documents, screens, series_id, season_id
                     ),
                 )
             except Exception as exc:
@@ -1472,6 +1795,7 @@ class JellyDiscApp(_BaseClass):
         frame_paths: list[Path],
         frame_index: int,
         documents: dict,
+        menu_screens: dict,
         series_id: str,
         season_id: str,
     ):
@@ -1486,12 +1810,14 @@ class JellyDiscApp(_BaseClass):
         self.preview_frame_paths = frame_paths
         self.preview_frame_index = frame_index
         self.preview_documents = documents
+        self.menu_preview_screens = menu_screens
         for kind, button in self.preview_document_buttons.items():
             button.configure(state="normal" if kind in documents else "disabled")
-        self._display_package_preview_frame()
-        self.preview_status.configure(
-            text="Drag to rotate. Click a part to inspect its printable PDF."
-        )
+        self._display_current_preview()
+        if self.preview_mode.get() == "Package":
+            self.preview_status.configure(
+                text="Drag to rotate. Click a part to inspect its printable PDF."
+            )
         self.refresh_preview_btn.configure(state="normal")
 
     def _display_package_preview_frame(self):
@@ -1513,6 +1839,223 @@ class JellyDiscApp(_BaseClass):
             self.preview_label._label.configure(image=self.preview_tk_image, text="")
         except Exception as exc:
             self._show_package_preview_error(exc)
+
+    def _display_current_preview(self):
+        if self.preview_mode.get() == "DVD menu":
+            self._display_menu_preview()
+        else:
+            self._stop_menu_audio()
+            self._display_package_preview_frame()
+
+    def _on_preview_mode_changed(self, _value=None):
+        if self.preview_mode.get() == "DVD menu":
+            self.document_buttons_frame.pack_forget()
+            self.menu_preview_controls.pack(fill="x", padx=14, pady=(2, 2),
+                                            before=self.preview_status)
+            self._start_menu_audio()
+        else:
+            self.menu_preview_controls.pack_forget()
+            self.document_buttons_frame.pack(fill="x", padx=14, pady=(2, 2),
+                                             before=self.preview_status)
+            self._stop_menu_audio()
+        self._display_current_preview()
+
+    def _go_to_preview_menu(self, screen: str):
+        if screen in self.menu_preview_screens:
+            self.menu_preview_screen = screen
+            self.menu_preview_hover = None
+            self._display_menu_preview()
+
+    def _toggle_menu_audio(self):
+        if self.menu_audio_process and self.menu_audio_process.poll() is None:
+            self.menu_audio_muted = True
+            self._stop_menu_audio()
+            self.menu_sound_btn.configure(text="Menu music off")
+        else:
+            self.menu_audio_muted = False
+            self._start_menu_audio()
+            self.menu_sound_btn.configure(
+                text="Menu music on" if self.menu_audio_process else "No theme music"
+            )
+
+    def _display_menu_preview(self):
+        screen = self.menu_preview_screens.get(self.menu_preview_screen)
+        if not screen:
+            self._clear_package_preview_image("DVD menu preview is still loading…")
+            return
+        try:
+            with Image.open(screen["background"]) as source:
+                image = source.convert("RGB")
+            if self.menu_preview_hover is not None:
+                with Image.open(screen["highlight"]) as highlight_source:
+                    highlight = highlight_source.convert("RGB")
+                # spumux treats black as transparent; mirror that behavior here.
+                alpha = highlight.convert("L").point(lambda value: 0 if value < 8 else 255)
+                image.paste(highlight, (0, 0), alpha)
+            image = image.resize((620, 349), Image.Resampling.LANCZOS)
+            self._clear_package_preview_image("")
+            self.menu_preview_photo = ImageTk.PhotoImage(
+                image, master=self.preview_label._label
+            )
+            self.preview_label._label.configure(image=self.menu_preview_photo, text="")
+            self.preview_status.configure(
+                text="This uses the same artwork and button map as the authored DVD."
+            )
+            self._sync_menu_audio()
+        except Exception as exc:
+            self._show_package_preview_error(exc)
+
+    def _menu_button_at(self, x: int, y: int) -> Optional[int]:
+        screen = self.menu_preview_screens.get(self.menu_preview_screen)
+        if not screen:
+            return None
+        label_width = max(620, self.preview_label._label.winfo_width())
+        label_height = max(349, self.preview_label._label.winfo_height())
+        image_x = x - (label_width - 620) // 2
+        image_y = y - (label_height - 349) // 2
+        if not (0 <= image_x <= 620 and 0 <= image_y <= 349):
+            return None
+        coded_x = int(image_x * 720 / 620)
+        coded_y = int(image_y * 480 / 349)
+        for index, (x0, y0, x1, y1) in enumerate(screen["buttons"]):
+            if x0 <= coded_x <= x1 and y0 <= coded_y <= y1:
+                return index
+        return None
+
+    def _on_menu_preview_motion(self, event):
+        if self.preview_mode.get() != "DVD menu":
+            return
+        hover = self._menu_button_at(event.x, event.y)
+        if hover != self.menu_preview_hover:
+            self.menu_preview_hover = hover
+            self._display_menu_preview()
+
+    def _on_menu_preview_leave(self, _event):
+        if self.preview_mode.get() == "DVD menu" and self.menu_preview_hover is not None:
+            self.menu_preview_hover = None
+            self._display_menu_preview()
+
+    def _on_menu_preview_key(self, event):
+        if self.preview_mode.get() != "DVD menu":
+            return
+        screen = self.menu_preview_screens.get(self.menu_preview_screen)
+        if not screen or not screen["buttons"]:
+            return
+        if event.keysym in ("Return", "space"):
+            index = self.menu_preview_hover if self.menu_preview_hover is not None else 0
+            self._activate_menu_preview_button(index)
+            return "break"
+        if event.keysym in ("Left", "Up", "Right", "Down"):
+            direction = -1 if event.keysym in ("Left", "Up") else 1
+            current = self.menu_preview_hover if self.menu_preview_hover is not None else 0
+            self.menu_preview_hover = (current + direction) % len(screen["buttons"])
+            self._display_menu_preview()
+            return "break"
+
+    def _start_menu_audio(self):
+        self._stop_menu_audio()
+        if self.menu_audio_muted:
+            return
+        audio_path = self._menu_audio_for_current_screen()
+        if not audio_path or not Path(audio_path).exists():
+            return
+        try:
+            import shutil
+            player = shutil.which("ffplay")
+            if player:
+                self.menu_audio_process = subprocess.Popen(
+                    [
+                        player, "-nodisp", "-loglevel", "quiet",
+                        "-stream_loop", "-1", str(audio_path),
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                self.menu_audio_path = Path(audio_path)
+        except Exception as exc:
+            logger.warning(f"Could not start preview menu audio: {exc}")
+
+    def _menu_audio_for_current_screen(self) -> Optional[Path]:
+        return select_preview_menu_audio(
+            self.menu_preview_screen, self.menu_preview_screens
+        )
+
+    def _sync_menu_audio(self):
+        desired = self._menu_audio_for_current_screen()
+        running = self.menu_audio_process and self.menu_audio_process.poll() is None
+        if self.menu_audio_muted:
+            if running:
+                self._stop_menu_audio()
+            return
+        if running and desired and self.menu_audio_path == Path(desired):
+            return
+        self._start_menu_audio()
+
+    def _stop_menu_audio(self):
+        process = self.menu_audio_process
+        self.menu_audio_process = None
+        self.menu_audio_path = None
+        if process and process.poll() is None:
+            try:
+                process.terminate()
+            except Exception:
+                pass
+
+    def _activate_menu_preview_button(self, index: int):
+        screen = self.menu_preview_screens.get(self.menu_preview_screen)
+        if not screen or index >= len(screen["actions"]):
+            return
+        action = screen["actions"][index]
+        if action in self.menu_preview_screens:
+            self.menu_preview_screen = action
+            self.menu_preview_hover = None
+            self._display_menu_preview()
+            return
+        if action == "play_all":
+            if self.selected_season and self.selected_season.episodes:
+                self._play_preview_episodes(
+                    [episode.id for episode in self.selected_season.episodes]
+                )
+            return
+        if action.startswith("episode:"):
+            self._play_preview_episodes([action.split(":", 1)[1]])
+
+    def _play_preview_episodes(self, episode_ids: list[str]):
+        if not self.jellyfin_client:
+            return
+        self._stop_menu_audio()
+        urls = [
+            self.jellyfin_client.get_stream_url(episode_id)
+            for episode_id in episode_ids
+        ]
+        try:
+            import platform
+            import shutil
+            if platform.system() == "Darwin" and Path("/Applications/VLC.app").exists():
+                subprocess.Popen(["open", "-a", "VLC", "--args", *urls])
+            elif shutil.which("vlc"):
+                subprocess.Popen(["vlc", *urls])
+            elif shutil.which("ffplay"):
+                subprocess.Popen(
+                    [
+                        shutil.which("ffplay"), "-autoexit", "-loglevel", "warning",
+                        urls[0],
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            else:
+                webbrowser.open(urls[0])
+            self.preview_status.configure(
+                text=(
+                    "Playing Jellyfin source video. VLC queues the full season "
+                    "when PLAY ALL is selected."
+                )
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "DVD preview", f"Could not play this episode: {exc}", parent=self
+            )
 
     def _on_preview_drag_start(self, event):
         self.preview_drag_x = event.x
@@ -1539,6 +2082,12 @@ class JellyDiscApp(_BaseClass):
         self.preview_drag_x = None
         self.preview_drag_origin = None
         if not origin or abs(event.x - origin[0]) > 8 or abs(event.y - origin[1]) > 8:
+            return
+        if self.preview_mode.get() == "DVD menu":
+            self.preview_label._label.focus_set()
+            button = self._menu_button_at(event.x, event.y)
+            if button is not None:
+                self._activate_menu_preview_button(button)
             return
         # The open-case model is consistently laid out as booklet-left/disc-right.
         if event.y > 315 or event.x < 55 or event.x > 585:
@@ -2337,15 +2886,19 @@ class JellyDiscApp(_BaseClass):
                 dir_list = getattr(self.selected_series, "directors", [])
                 wri_list = getattr(self.selected_series, "writers", [])
                 
-                questions = generate_trivia_questions(
-                    series_name=self.selected_series.name,
-                    season_name=self.selected_season.name,
-                    release_year=rel_year,
-                    episodes=eps_list,
-                    actors=act_list,
-                    directors=dir_list,
-                    writers=wri_list
+                questions = self.menu_preview_screens.get(
+                    "_trivia_questions", []
                 )
+                if not questions:
+                    questions = generate_trivia_questions(
+                        series_name=self.selected_series.name,
+                        season_name=self.selected_season.name,
+                        release_year=rel_year,
+                        episodes=eps_list,
+                        actors=act_list,
+                        directors=dir_list,
+                        writers=wri_list
+                    )
                 
                 t_questions, t_wrong, t_win = menu_builder.generate_trivia_menus(
                     questions, backdrop_path, logo_path
@@ -2578,6 +3131,14 @@ class JellyDiscApp(_BaseClass):
             self._log(f"\nISO files saved to: {self.config.output_dir}")
             for iso in iso_files:
                 self._log(f"  - {iso.name}")
+            self.after(
+                0,
+                lambda files=list(iso_files): self._enable_finished_preview(files),
+            )
+
+    def _enable_finished_preview(self, iso_files: list[Path]):
+        self.finished_iso_files = iso_files
+        self.play_finished_btn.configure(state="normal")
     
     def _update_task(self, status: str, progress: float):
         """Update task progress display."""
