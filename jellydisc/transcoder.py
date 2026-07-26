@@ -115,6 +115,9 @@ class Transcoder:
     
     # Reserved space for menus and overhead (MB)
     MENU_OVERHEAD_MB = 100
+
+    # Existing MPEGs without this marker may contain DVD mux buffer underflows.
+    TRANSCODE_VERSION = "2-dvd-mux-buffering"
     
     def __init__(
         self,
@@ -141,6 +144,28 @@ class Transcoder:
         # Verify FFmpeg is available
         self._ffmpeg_path = self._find_ffmpeg()
         self._ffprobe_path = self._find_ffprobe()
+
+    @classmethod
+    def _version_path(cls, output_path: Path) -> Path:
+        return Path(f"{output_path}.version")
+
+    @classmethod
+    def is_cached_output_current(cls, output_path: Path) -> bool:
+        """Return whether an existing output uses the current muxing pipeline."""
+        output_path = Path(output_path)
+        version_path = cls._version_path(output_path)
+        if not output_path.exists() or not version_path.exists():
+            return False
+        try:
+            return version_path.read_text(encoding="utf-8").strip() == cls.TRANSCODE_VERSION
+        except OSError:
+            return False
+
+    @classmethod
+    def _mark_output_current(cls, output_path: Path) -> None:
+        cls._version_path(output_path).write_text(
+            cls.TRANSCODE_VERSION + "\n", encoding="utf-8"
+        )
         
     def _find_ffmpeg(self) -> str:
         """Find the FFmpeg binary path."""
@@ -614,6 +639,15 @@ class Transcoder:
             cmd.extend(["-af", ",".join(audio_filters)])
             
         cmd.extend([
+            # A DVD program stream must be paced for the fixed-rate DVD reader
+            # buffer. Without these mux settings FFmpeg can emit thousands of
+            # buffer-underflow warnings; standalone players may then mute,
+            # freeze, or jump backwards while crossing an underflow.
+            "-muxrate", "10080000",
+            "-packetsize", "2048",
+            "-muxpreload", "0.5",
+            "-muxdelay", "0.7",
+
             # Output format - use dvd for DVD VOB compatibility
             "-f", "dvd",
             
@@ -669,6 +703,7 @@ class Transcoder:
                 raise TranscodeFailedError(f"Output file was not created: {output_path}")
             
             logger.info(f"Transcoding complete: {output_path}")
+            self._mark_output_current(output_path)
             
             if progress_callback:
                 progress_callback(1.0)

@@ -94,7 +94,7 @@ class JellyfinClient:
     DEVICE_NAME = "JellyDisc"
     DEVICE_ID = "jellydisc-dvd-authoring"
     CLIENT_NAME = "JellyDisc"
-    CLIENT_VERSION = "0.1.0"
+    CLIENT_VERSION = "0.2.1"
     
     def __init__(self, server_url: str):
         """

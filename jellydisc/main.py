@@ -1667,10 +1667,8 @@ class JellyDiscApp(_BaseClass):
                         self._log(f"⚠️ Failed to download subtitles: {e}")
                 
                 # 2. Check cache first
-                skip_transcode = True
-                if not job.output_path.exists():
-                    skip_transcode = False
-                elif include_subs:
+                skip_transcode = transcoder.is_cached_output_current(job.output_path)
+                if skip_transcode and include_subs:
                     if not srt_path.exists():
                         skip_transcode = False
                     elif srt_path.stat().st_mtime > job.output_path.stat().st_mtime:
@@ -2738,7 +2736,10 @@ def run_cli(args):
                         download_episode_subtitles(client, ep_id, srt_path)
                     
             # 2. Check if we can skip transcode
-            skip_transcode = job.output_path.exists() and job.output_path.stat().st_size > 10 * 1024 * 1024
+            skip_transcode = (
+                transcoder.is_cached_output_current(job.output_path)
+                and job.output_path.stat().st_size > 10 * 1024 * 1024
+            )
             if skip_transcode and include_subs:
                 if not srt_path.exists():
                      skip_transcode = False
