@@ -56,6 +56,7 @@ class Series:
     overview: str = ""
     year: Optional[int] = None
     rating: Optional[str] = None
+    primary_image_url: Optional[str] = None
     backdrop_image_url: Optional[str] = None
     logo_image_url: Optional[str] = None
     theme_song_url: Optional[str] = None
@@ -250,6 +251,9 @@ class JellyfinClient:
                 overview=item.get("Overview", ""),
                 year=item.get("ProductionYear"),
                 rating=item.get("OfficialRating"),
+                primary_image_url=self._get_image_url(
+                    item["Id"], "Primary", max_width=160
+                ),
                 backdrop_image_url=self._get_image_url(item["Id"], "Backdrop"),
                 logo_image_url=self._get_image_url(item["Id"], "Logo"),
                 actors=[],  # Loaded on-demand
@@ -259,7 +263,48 @@ class JellyfinClient:
         
         return shows
 
-    def search_library(self, query: str) -> list[Series]:
+    def browse_library(
+        self,
+        start_index: int = 0,
+        limit: int = 30,
+        item_types: str = "Series,Movie",
+    ) -> list[Series]:
+        """Fetch one lightweight page of movies and shows for library browsing."""
+        if not self.is_authenticated():
+            raise AuthenticationError("Not authenticated. Call authenticate() first.")
+
+        params = {
+            "IncludeItemTypes": item_types,
+            "Recursive": True,
+            "Fields": "Overview",
+            "SortBy": "DateCreated,SortName",
+            "SortOrder": "Descending,Ascending",
+            "StartIndex": max(0, int(start_index)),
+            "Limit": max(1, min(int(limit), 100)),
+            "EnableTotalRecordCount": False,
+        }
+        result = self._make_request(
+            "GET", f"/Users/{self.user_id}/Items", params=params
+        )
+        return [
+            Series(
+                id=item["Id"],
+                name=item["Name"],
+                overview=item.get("Overview", ""),
+                year=item.get("ProductionYear"),
+                rating=item.get("OfficialRating"),
+                primary_image_url=self._get_image_url(
+                    item["Id"], "Primary", max_width=160
+                ),
+                backdrop_image_url=self._get_image_url(item["Id"], "Backdrop"),
+                logo_image_url=self._get_image_url(item["Id"], "Logo"),
+                actors=[],
+                type=item.get("Type", "Series"),
+            )
+            for item in result.get("Items", [])
+        ]
+
+    def search_library(self, query: str, limit: int = 40) -> list[Series]:
         """
         Search the library for Series and Movies matching the query.
         
@@ -273,7 +318,7 @@ class JellyfinClient:
             raise AuthenticationError("Not authenticated. Call authenticate() first.")
             
         if not query:
-            return self.get_tv_shows()
+            return []
             
         params = {
             "IncludeItemTypes": "Series,Movie",
@@ -281,7 +326,9 @@ class JellyfinClient:
             "Fields": "Overview,ProviderIds,Path",
             "SearchTerm": query,
             "SortBy": "SortName",
-            "SortOrder": "Ascending"
+            "SortOrder": "Ascending",
+            "Limit": max(1, min(int(limit), 100)),
+            "EnableTotalRecordCount": False,
         }
         
         result = self._make_request("GET", f"/Users/{self.user_id}/Items", params=params)
@@ -294,6 +341,9 @@ class JellyfinClient:
                 overview=item.get("Overview", ""),
                 year=item.get("ProductionYear"),
                 rating=item.get("OfficialRating"),
+                primary_image_url=self._get_image_url(
+                    item["Id"], "Primary", max_width=160
+                ),
                 backdrop_image_url=self._get_image_url(item["Id"], "Backdrop"),
                 logo_image_url=self._get_image_url(item["Id"], "Logo"),
                 actors=[],  # Loaded on-demand

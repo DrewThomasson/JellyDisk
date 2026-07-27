@@ -8,6 +8,7 @@ interactive menus, metadata, and subtitles.
 """
 
 import logging
+import json
 import os
 import subprocess
 import sys
@@ -77,6 +78,52 @@ from .burner import (
 )
 from .art_generator import ArtGenerator
 from .preview_renderer import DVDPreviewRenderer
+
+CREDENTIAL_SERVICE = "JellyDisk Jellyfin"
+CREDENTIAL_ACCOUNT = "default"
+
+
+def load_saved_login() -> Optional[dict]:
+    """Load Jellyfin credentials from the operating system credential vault."""
+    try:
+        import keyring
+        payload = keyring.get_password(CREDENTIAL_SERVICE, CREDENTIAL_ACCOUNT)
+        if not payload:
+            return None
+        saved = json.loads(payload)
+        if all(saved.get(key) for key in ("server", "username", "password")):
+            return saved
+    except Exception as exc:
+        logger.warning(f"Could not read saved Jellyfin login: {exc}")
+    return None
+
+
+def save_login(server: str, username: str, password: str) -> bool:
+    """Store Jellyfin credentials in the operating system credential vault."""
+    try:
+        import keyring
+        keyring.set_password(
+            CREDENTIAL_SERVICE,
+            CREDENTIAL_ACCOUNT,
+            json.dumps(
+                {"server": server, "username": username, "password": password}
+            ),
+        )
+        return True
+    except Exception as exc:
+        logger.warning(f"Could not save Jellyfin login: {exc}")
+        return False
+
+
+def forget_saved_login() -> bool:
+    """Remove the saved Jellyfin login from the credential vault."""
+    try:
+        import keyring
+        keyring.delete_password(CREDENTIAL_SERVICE, CREDENTIAL_ACCOUNT)
+        return True
+    except Exception as exc:
+        logger.warning(f"Could not remove saved Jellyfin login: {exc}")
+        return False
 
 logger = logging.getLogger(__name__)
 
@@ -448,6 +495,22 @@ class JellyDiscApp(_BaseClass):
         env_pass = os.environ.get("JELLYFIN_PASS", "")
         if env_pass:
             self.pass_entry.insert(0, env_pass)
+
+        self.remember_login_var = ctk.BooleanVar(value=False)
+        self.remember_login_check = ctk.CTkCheckBox(
+            center_frame,
+            text="Remember login securely",
+            variable=self.remember_login_var,
+        )
+        self.remember_login_check.pack(anchor="w", pady=(0, 12))
+
+        saved_login = load_saved_login()
+        if saved_login and not (env_url or env_user or env_pass):
+            self.url_entry.insert(0, saved_login["server"])
+            self.user_entry.insert(0, saved_login["username"])
+            self.pass_entry.insert(0, saved_login["password"])
+            self.remember_login_var.set(True)
+            self.after(350, self._connect_with_saved_login)
         
         # Connect button
         self.connect_btn = ctk.CTkButton(
@@ -466,73 +529,181 @@ class JellyDiscApp(_BaseClass):
             font=ctk.CTkFont(size=12)
         )
         self.connect_status.pack(pady=10)
+
+    def _connect_with_saved_login(self):
+        """Reconnect automatically when a credential-vault login is available."""
+        if self.remember_login_var.get() and not self.jellyfin_client:
+            self._on_connect()
     
     def _create_library_tab(self):
-        """Create the Library tab for browsing TV shows."""
-        # Left panel - Show list
-        left_frame = ctk.CTkFrame(self.tab_library)
-        left_frame.pack(side="left", fill="both", expand=True, padx=(10, 5), pady=10)
-        
-        # Header
-        header = ctk.CTkLabel(
-            left_frame,
-            text="TV Shows & Movies",
-            font=ctk.CTkFont(size=18, weight="bold")
-        )
-        header.pack(pady=(10, 5))
-        
-        # Search Bar
+        """Create a search-first Jellyfin library browser."""
+        library = ctk.CTkFrame(self.tab_library, fg_color="transparent")
+        library.pack(fill="both", expand=True, padx=14, pady=14)
+        library.grid_columnconfigure(0, weight=2, minsize=350)
+        library.grid_columnconfigure(1, weight=3, minsize=460)
+        library.grid_rowconfigure(1, weight=1)
+
+        heading = ctk.CTkFrame(library, fg_color="transparent")
+        heading.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+        ctk.CTkLabel(
+            heading,
+            text="Choose something to author",
+            font=ctk.CTkFont(size=24, weight="bold"),
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            heading,
+            text="Search Jellyfin, choose a season, then preview your DVD.",
+            font=ctk.CTkFont(size=13),
+            text_color=("gray42", "gray70"),
+        ).pack(anchor="w", pady=(2, 0))
+
+        search_card = ctk.CTkFrame(library)
+        search_card.grid(row=1, column=0, sticky="nsew", padx=(0, 7))
+        ctk.CTkLabel(
+            search_card,
+            text="Search your library",
+            font=ctk.CTkFont(size=17, weight="bold"),
+        ).pack(anchor="w", padx=16, pady=(16, 2))
+        ctk.CTkLabel(
+            search_card,
+            text="Enter at least two characters. Results come directly from Jellyfin.",
+            font=ctk.CTkFont(size=12),
+            text_color=("gray42", "gray70"),
+            wraplength=330,
+            justify="left",
+        ).pack(anchor="w", padx=16, pady=(0, 10))
+
+        search_row = ctk.CTkFrame(search_card, fg_color="transparent")
+        search_row.pack(fill="x", padx=16)
         self.search_var = ctk.StringVar(value="")
         self.search_entry = ctk.CTkEntry(
-            left_frame,
-            placeholder_text="Search library...",
-            textvariable=self.search_var
+            search_row,
+            placeholder_text="Search shows and movies…",
+            textvariable=self.search_var,
+            height=42,
+            font=ctk.CTkFont(size=14),
         )
-        self.search_entry.pack(fill="x", padx=10, pady=(0, 10))
+        self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.search_entry.bind("<Return>", lambda _event: self._perform_server_search())
+        self.library_search_btn = ctk.CTkButton(
+            search_row,
+            text="Search",
+            width=82,
+            height=42,
+            command=self._perform_server_search,
+        )
+        self.library_search_btn.pack(side="right")
         self.search_var.trace_add("write", self._on_search_changed)
-        
-        # Show scrollable frame for shows
-        self.shows_frame = ctk.CTkScrollableFrame(left_frame)
-        self.shows_frame.pack(fill="both", expand=True, padx=5, pady=5)
-        
-        self.show_widgets = []  # Store show buttons
-        
-        # Right panel - Season/Episode details
-        right_frame = ctk.CTkFrame(self.tab_library)
-        right_frame.pack(side="right", fill="both", expand=True, padx=(5, 10), pady=10)
-        
-        # Season selection
-        self.season_label = ctk.CTkLabel(
-            right_frame,
-            text="Select a show",
-            font=ctk.CTkFont(size=16, weight="bold")
+        self.library_results_label = ctk.CTkLabel(
+            search_card,
+            text="Search to find a title",
+            anchor="w",
+            font=ctk.CTkFont(size=12),
+            text_color=("gray42", "gray70"),
         )
-        self.season_label.pack(pady=10)
-        
-        # Season dropdown
+        self.library_results_label.pack(fill="x", padx=16, pady=(12, 4))
+
+        self.shows_frame = ctk.CTkScrollableFrame(
+            search_card, fg_color="transparent"
+        )
+        self.shows_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self.show_widgets = []
+        self.library_buttons_by_id = {}
+        self.library_thumbnail_images = {}
+        self.library_empty_label = ctk.CTkLabel(
+            self.shows_frame,
+            text="⌕\n\nYour library is ready to search.\nTry a show title, movie, or keyword.",
+            font=ctk.CTkFont(size=14),
+            text_color=("gray45", "gray65"),
+            justify="center",
+        )
+        self.library_empty_label.pack(expand=True, pady=70)
+        self.library_browse_offset = 0
+        self.library_browse_page_size = 30
+        self.library_browse_loading = False
+        self.library_browse_has_more = True
+        self.library_mode = "browse"
+        self.library_browse_generation = 0
+        self.shows_frame._parent_canvas.bind(
+            "<MouseWheel>",
+            lambda _event: self.after_idle(self._load_more_library_if_needed),
+            add="+",
+        )
+        self.shows_frame._parent_canvas.bind(
+            "<Configure>",
+            lambda _event: self.after_idle(self._load_more_library_if_needed),
+            add="+",
+        )
+
+        detail_card = ctk.CTkFrame(library)
+        detail_card.grid(row=1, column=1, sticky="nsew", padx=(7, 0))
+        self.season_label = ctk.CTkLabel(
+            detail_card,
+            text="Select a title",
+            font=ctk.CTkFont(size=21, weight="bold"),
+            anchor="w",
+            justify="left",
+        )
+        self.season_label.pack(fill="x", padx=18, pady=(18, 2))
+        self.library_selection_meta = ctk.CTkLabel(
+            detail_card,
+            text="Choose a search result to see its seasons and episodes.",
+            font=ctk.CTkFont(size=12),
+            text_color=("gray42", "gray70"),
+            anchor="w",
+        )
+        self.library_selection_meta.pack(fill="x", padx=18, pady=(0, 8))
+        self.library_overview_label = ctk.CTkLabel(
+            detail_card,
+            text="",
+            font=ctk.CTkFont(size=12),
+            text_color=("gray35", "gray75"),
+            wraplength=500,
+            justify="left",
+            anchor="w",
+        )
+        self.library_overview_label.pack(fill="x", padx=18, pady=(0, 12))
+
+        season_row = ctk.CTkFrame(detail_card, fg_color="transparent")
+        season_row.pack(fill="x", padx=18, pady=(2, 10))
+        ctk.CTkLabel(
+            season_row,
+            text="Season",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(side="left", padx=(0, 12))
         self.season_var = ctk.StringVar(value="")
         self.season_dropdown = ctk.CTkComboBox(
-            right_frame,
+            season_row,
             values=[],
             variable=self.season_var,
             command=self._on_season_selected,
-            width=300,
-            state="disabled"
+            state="disabled",
+            height=36,
         )
-        self.season_dropdown.pack(pady=10)
-        
-        # Episode list
-        self.episodes_frame = ctk.CTkScrollableFrame(right_frame)
-        self.episodes_frame.pack(fill="both", expand=True, padx=5, pady=5)
-        
-        # Select button
+        self.season_dropdown.pack(side="left", fill="x", expand=True)
+
+        self.episodes_frame = ctk.CTkScrollableFrame(
+            detail_card,
+            label_text="Episodes",
+        )
+        self.episodes_frame.pack(
+            fill="both", expand=True, padx=14, pady=(0, 12)
+        )
+        ctk.CTkLabel(
+            self.episodes_frame,
+            text="Episode details will appear here.",
+            text_color=("gray45", "gray65"),
+        ).pack(pady=36)
+
         self.select_season_btn = ctk.CTkButton(
-            right_frame,
-            text="Author This Season",
+            detail_card,
+            text="Continue with this season  →",
             command=self._on_author_season,
-            state="disabled"
+            state="disabled",
+            height=44,
+            font=ctk.CTkFont(size=14, weight="bold"),
         )
-        self.select_season_btn.pack(pady=10)
+        self.select_season_btn.pack(fill="x", padx=18, pady=(0, 18))
     
     def _create_config_tab(self):
         """Create the Authoring Config tab."""
@@ -1188,6 +1359,7 @@ class JellyDiscApp(_BaseClass):
         url = self.url_entry.get().strip()
         username = self.user_entry.get().strip()
         password = self.pass_entry.get()
+        remember_login = self.remember_login_var.get()
         
         if not url or not username or not password:
             self._on_connect_error("Enter the server URL, username, and password.")
@@ -1208,13 +1380,20 @@ class JellyDiscApp(_BaseClass):
                 
                 # Authenticate
                 client.authenticate(username, password)
+
+                login_save_failed = False
+                if remember_login:
+                    login_save_failed = not save_login(url, username, password)
+                elif load_saved_login():
+                    forget_saved_login()
                 
                 self.jellyfin_client = client
                 
                 # Update UI on success
                 self.after(
                     0,
-                    lambda name=server_name: self._on_connect_success(name),
+                    lambda name=server_name, failed=login_save_failed:
+                        self._on_connect_success(name, failed),
                 )
                 
             except JellyfinConnectionError as exc:
@@ -1229,22 +1408,27 @@ class JellyDiscApp(_BaseClass):
         
         threading.Thread(target=connect, daemon=True).start()
     
-    def _on_connect_success(self, server_name: str):
+    def _on_connect_success(
+        self, server_name: str, login_save_failed: bool = False
+    ):
         """Handle successful connection."""
         self.connect_btn.configure(state="normal", text="Connected ✓")
         self.connect_status.configure(
-            text=f"Connected to {server_name}",
-            text_color="green"
+            text=(
+                f"Connected to {server_name}"
+                if not login_save_failed
+                else "Connected, but the login could not be saved securely."
+            ),
+            text_color="green" if not login_save_failed else "orange",
         )
         
         self._set_status(f"Connected to {server_name}")
         self._log(f"✓ Connected to {server_name}")
         
-        # Load TV shows
-        self._load_tv_shows()
-        
         # Switch to library tab
         self.tabview.set("2  Library")
+        self._start_library_browse()
+        self.search_entry.focus_set()
     
     def _on_connect_error(self, message: str):
         """Handle connection error."""
@@ -1257,32 +1441,6 @@ class JellyDiscApp(_BaseClass):
             except Exception:
                 pass
     
-    def _load_tv_shows(self):
-        """Load TV shows from Jellyfin."""
-        if not self.jellyfin_client:
-            return
-        
-        self._set_status("Loading TV shows...")
-        
-        def load():
-            try:
-                shows = self.jellyfin_client.get_tv_shows()
-                self.after(0, lambda items=shows: self._populate_shows(items))
-            except Exception as e:
-                self.after(
-                    0,
-                    lambda ex=e: self._show_library_error("load the library", ex),
-                )
-        
-        threading.Thread(target=load, daemon=True).start()
-    
-    def _populate_shows(self, shows: list[Series]):
-        """Populate the shows list on initial load."""
-        self.all_shows = shows
-        self._populate_search_results(shows, "")
-        self._set_status(f"Found {len(shows)} TV shows")
-        self._log(f"✓ Loaded {len(shows)} TV shows")
-
     def _on_search_changed(self, *args):
         """Called when search text changes (debounced search)."""
         if hasattr(self, "_search_timer_id") and self._search_timer_id:
@@ -1299,23 +1457,27 @@ class JellyDiscApp(_BaseClass):
             return
             
         query = self.search_var.get().strip()
-        if not query:
-            # If search is cleared, just show all TV shows loaded on startup
-            if hasattr(self, "all_shows"):
-                self._populate_search_results(self.all_shows, "")
+        if len(query) < 2:
+            self._start_library_browse()
             return
-            
+
+        self.library_mode = "search"
+        self.library_search_btn.configure(state="disabled", text="…")
+        self.library_results_label.configure(text=f"Searching for “{query}”…")
         self._set_status(f"Searching for '{query}'...")
         
         def run_search():
             try:
-                results = self.jellyfin_client.search_library(query)
+                results = self.jellyfin_client.search_library(query, limit=40)
                 self.after(
                     0,
                     lambda: self._apply_search_results_if_current(results, query),
                 )
             except Exception as e:
-                self.after(0, lambda ex=e: self._log(f"Search error: {ex}"))
+                self.after(
+                    0,
+                    lambda ex=e: self._show_library_search_error(ex),
+                )
                 
         threading.Thread(target=run_search, daemon=True).start()
 
@@ -1323,36 +1485,225 @@ class JellyDiscApp(_BaseClass):
         """Apply server search results only if the UI query still matches."""
         if self.search_var.get().strip() == query:
             self._populate_search_results(results, query)
+        self.library_search_btn.configure(state="normal", text="Search")
 
-    def _populate_search_results(self, results: list[Series], query: str):
-        """Populate the shows sidebar with search results."""
-        # Clear existing widgets
+    def _clear_library_results(self):
         for widget in self.show_widgets:
             widget.destroy()
         self.show_widgets.clear()
-        
+        self.library_buttons_by_id.clear()
+
+    def _start_library_browse(self):
+        """Reset to the progressively loaded mixed movie/show library."""
+        if not self.jellyfin_client:
+            return
+        self.library_mode = "browse"
+        self.library_browse_generation += 1
+        self.library_browse_offset = 0
+        self.library_browse_has_more = True
+        self.library_browse_loading = False
+        self._clear_library_results()
+        self.library_empty_label.configure(text="Loading your library…")
+        if not self.library_empty_label.winfo_manager():
+            self.library_empty_label.pack(expand=True, pady=70)
+        self.library_results_label.configure(text="Recently added")
+        self.library_search_btn.configure(state="normal", text="Search")
+        self._load_next_library_page()
+
+    def _load_more_library_if_needed(self):
+        if self.library_mode != "browse" or not self.library_browse_has_more:
+            return
+        try:
+            _, bottom = self.shows_frame._parent_canvas.yview()
+        except Exception:
+            return
+        if bottom >= 0.88:
+            self._load_next_library_page()
+
+    def _load_next_library_page(self):
+        if (
+            not self.jellyfin_client
+            or self.library_mode != "browse"
+            or self.library_browse_loading
+            or not self.library_browse_has_more
+        ):
+            return
+        self.library_browse_loading = True
+        start_index = self.library_browse_offset
+        generation = self.library_browse_generation
+        self.library_results_label.configure(
+            text="Loading your library…"
+            if start_index == 0 else f"Showing {start_index} titles · Loading more…"
+        )
+
+        def load_page():
+            try:
+                items = self.jellyfin_client.browse_library(
+                    start_index=start_index,
+                    limit=self.library_browse_page_size,
+                )
+                self.after(
+                    0,
+                    lambda: self._append_library_page(
+                        items, start_index, generation
+                    ),
+                )
+            except Exception as exc:
+                self.after(
+                    0,
+                    lambda error=exc: self._show_library_browse_error(error),
+                )
+
+        threading.Thread(target=load_page, daemon=True).start()
+
+    def _append_library_page(self, items, start_index, generation):
+        if (
+            self.library_mode != "browse"
+            or generation != self.library_browse_generation
+            or start_index != self.library_browse_offset
+        ):
+            return
+        self.library_browse_loading = False
+        self.library_empty_label.pack_forget()
+        self._append_library_results(items)
+        self.library_browse_offset += len(items)
+        self.library_browse_has_more = (
+            len(items) == self.library_browse_page_size
+        )
+        if not self.show_widgets:
+            self.library_empty_label.configure(
+                text="Your Jellyfin library has no movies or shows yet."
+            )
+            self.library_empty_label.pack(expand=True, pady=70)
+        suffix = " · Scroll for more" if self.library_browse_has_more else ""
+        self.library_results_label.configure(
+            text=f"Showing {self.library_browse_offset} titles{suffix}"
+        )
+        self.after_idle(self._load_more_library_if_needed)
+
+    def _show_library_browse_error(self, error):
+        if self.library_mode != "browse":
+            return
+        self.library_browse_loading = False
+        self.library_results_label.configure(text="Could not load library")
+        self._log(f"Library browse error: {error}")
+
+    def _show_library_search_error(self, error):
+        self.library_search_btn.configure(state="normal", text="Search")
+        self.library_results_label.configure(text="Search failed — try again")
+        self._log(f"Search error: {error}")
+
+    def _populate_search_results(self, results: list[Series], query: str):
+        """Populate the shows sidebar with search results."""
+        self._clear_library_results()
+        self.library_empty_label.pack_forget()
+        self._append_library_results(results)
+
+        if results:
+            capped = " (first 40)" if len(results) == 40 else ""
+            self.library_results_label.configure(
+                text=f"{len(results)} results{capped}"
+            )
+        else:
+            self.library_empty_label.configure(
+                text=f"No matches for “{query}”\n\nTry a shorter title or another keyword."
+            )
+            self.library_empty_label.pack(expand=True, pady=70)
+            self.library_results_label.configure(text="No results")
+        self._set_status(f"Found {len(results)} matches for '{query}'")
+
+    def _append_library_results(self, results: list[Series]):
+        """Append title cards without rebuilding already-visible pages."""
         for show in results:
-            prefix = "🎬" if show.type == "Movie" else "📺"
             btn = ctk.CTkButton(
                 self.shows_frame,
-                text=f"{prefix} {show.name} ({show.year or 'N/A'})",
+                text=(
+                    f"{show.name}\n"
+                    f"{show.type}  •  {show.year or 'Year unknown'}"
+                ),
                 anchor="w",
+                height=68,
+                fg_color=("gray82", "gray20"),
+                hover_color=("gray75", "gray27"),
+                text_color=("gray12", "gray92"),
                 command=lambda s=show: self._on_show_selected(s)
             )
-            btn.pack(fill="x", pady=2)
+            btn._library_item_id = show.id
+            btn.pack(fill="x", pady=3, padx=2)
             self.show_widgets.append(btn)
-            
-        if query:
-            self._set_status(f"Found {len(results)} matches for '{query}'")
-        else:
-            self._set_status(f"Found {len(results)} TV shows")
+            self.library_buttons_by_id[show.id] = btn
+            cached_image = self.library_thumbnail_images.get(show.id)
+            if cached_image:
+                btn.configure(image=cached_image, compound="left")
+        self._load_library_thumbnails(results)
+
+    def _load_library_thumbnails(self, results: list[Series]):
+        """Load small poster art progressively without blocking library browsing."""
+        pending = [
+            show
+            for show in results
+            if show.primary_image_url
+            and show.id not in self.library_thumbnail_images
+        ]
+        if not pending or not self.jellyfin_client:
+            return
+        client = self.jellyfin_client
+        cache_dir = self.config.assets_dir / "library-thumbnails"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        def load():
+            for show in pending:
+                try:
+                    image_path = cache_dir / f"{sanitize_filename(show.id)}.jpg"
+                    if not image_path.exists():
+                        client.download_image(show.primary_image_url, image_path)
+                    with Image.open(image_path) as source:
+                        poster = source.convert("RGB")
+                        poster.thumbnail((84, 120), Image.Resampling.LANCZOS)
+                        poster = poster.copy()
+                    self.after(
+                        0,
+                        lambda item_id=show.id, image=poster:
+                            self._apply_library_thumbnail(item_id, image),
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        f"Could not load library thumbnail for {show.name}: {exc}"
+                    )
+
+        threading.Thread(target=load, daemon=True).start()
+
+    def _apply_library_thumbnail(self, item_id: str, poster):
+        thumbnail = ctk.CTkImage(
+            light_image=poster,
+            dark_image=poster,
+            size=(42, 60),
+        )
+        self.library_thumbnail_images[item_id] = thumbnail
+        button = self.library_buttons_by_id.get(item_id)
+        if button and button.winfo_exists():
+            button.configure(image=thumbnail, compound="left")
     
     def _on_show_selected(self, series: Series):
         """Handle show selection."""
         self.selected_series = series
         self.selected_season = None
         self.disc_plans = []
+        for button in self.show_widgets:
+            selected = getattr(button, "_library_item_id", None) == series.id
+            button.configure(
+                fg_color=("#3b6ea8", "#275d91") if selected
+                else ("gray82", "gray20")
+            )
         self.season_label.configure(text=series.name)
+        meta = f"{series.type}  •  {series.year or 'Year unknown'}"
+        if series.rating:
+            meta += f"  •  {series.rating}"
+        self.library_selection_meta.configure(text=meta)
+        overview = (series.overview or "").strip()
+        self.library_overview_label.configure(
+            text=overview[:420] + ("…" if len(overview) > 420 else "")
+        )
         self.season_dropdown.configure(values=[], state="disabled")
         self.season_var.set("Loading seasons…")
         self.select_season_btn.configure(state="disabled")
@@ -1402,6 +1753,10 @@ class JellyDiscApp(_BaseClass):
         """Populate the seasons dropdown."""
         if not self.selected_series or self.selected_series.id != series_id:
             return
+        overview = (self.selected_series.overview or "").strip()
+        self.library_overview_label.configure(
+            text=overview[:420] + ("…" if len(overview) > 420 else "")
+        )
         self.seasons_data = {s.name: s for s in seasons}
         
         season_names = [s.name for s in seasons]
@@ -1473,15 +1828,28 @@ class JellyDiscApp(_BaseClass):
             widget.destroy()
         
         for ep in episodes:
-            frame = ctk.CTkFrame(self.episodes_frame)
-            frame.pack(fill="x", pady=2)
-            
-            label = ctk.CTkLabel(
-                frame,
-                text=f"E{ep.index_number}: {ep.name} ({ep.runtime_minutes:.0f} min)",
-                anchor="w"
+            frame = ctk.CTkFrame(
+                self.episodes_frame, fg_color=("gray84", "gray19")
             )
-            label.pack(fill="x", padx=10, pady=5)
+            frame.pack(fill="x", pady=3, padx=2)
+
+            ctk.CTkLabel(
+                frame,
+                text=f"E{ep.index_number}",
+                width=42,
+                font=ctk.CTkFont(size=12, weight="bold"),
+                text_color=("#2d659b", "#75aee5"),
+            ).pack(side="left", padx=(10, 4), pady=9)
+            ctk.CTkLabel(
+                frame,
+                text=ep.name,
+                anchor="w",
+            ).pack(side="left", fill="x", expand=True, pady=9)
+            ctk.CTkLabel(
+                frame,
+                text=f"{ep.runtime_minutes:.0f} min",
+                text_color=("gray42", "gray68"),
+            ).pack(side="right", padx=10, pady=9)
         
         self.select_season_btn.configure(state="normal")
         self._set_status(f"Found {len(episodes)} episodes")
@@ -3384,6 +3752,13 @@ def run_cli(args):
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
+
+    if args.forget_login:
+        removed = forget_saved_login()
+        print("✓ Saved Jellyfin login removed." if removed
+              else "No saved login could be removed.")
+        if not (args.show or args.list_drives or args.erase):
+            return
     
     # 1. Handle list-drives
     if args.list_drives:
@@ -3419,9 +3794,22 @@ def run_cli(args):
         return
 
     # 3. Connection details
-    server_url = args.server or os.environ.get("JELLYFIN_URL")
-    username = args.username or os.environ.get("JELLYFIN_USER")
-    password = args.password or os.environ.get("JELLYFIN_PASS")
+    saved_login = load_saved_login() if args.use_saved_login else None
+    server_url = (
+        args.server
+        or os.environ.get("JELLYFIN_URL")
+        or (saved_login or {}).get("server")
+    )
+    username = (
+        args.username
+        or os.environ.get("JELLYFIN_USER")
+        or (saved_login or {}).get("username")
+    )
+    password = (
+        args.password
+        or os.environ.get("JELLYFIN_PASS")
+        or (saved_login or {}).get("password")
+    )
     show_query = args.show
     
     is_interactive = sys.stdin.isatty()
@@ -3455,6 +3843,11 @@ def run_cli(args):
     try:
         client.authenticate(username, password)
         print("✓ Connected successfully!")
+        if args.save_login:
+            if save_login(server_url, username, password):
+                print("✓ Login saved securely in the system credential vault.")
+            else:
+                print("⚠️ Login could not be saved; no plaintext fallback was used.")
     except Exception as e:
         print(f"❌ Connection failed: {e}")
         sys.exit(1)
@@ -4271,6 +4664,9 @@ def main():
     parser.add_argument("--server", help="Jellyfin server URL (or JELLYFIN_URL environment variable)")
     parser.add_argument("--username", help="Jellyfin username (or JELLYFIN_USER environment variable)")
     parser.add_argument("--password", help="Jellyfin password (or JELLYFIN_PASS environment variable)")
+    parser.add_argument("--use-saved-login", action="store_true", help="Use credentials saved in the system credential vault")
+    parser.add_argument("--save-login", action="store_true", help="Save a successful login in the system credential vault")
+    parser.add_argument("--forget-login", action="store_true", help="Remove the saved credential-vault login")
     parser.add_argument("--show", help="Name of TV Show or Movie to fetch and author")
     parser.add_argument("--season", help="Season number or name (e.g. '1' or 'Season 1')")
     parser.add_argument("--standard", choices=["NTSC", "PAL"], default="NTSC", help="DVD video standard")
@@ -4288,7 +4684,16 @@ def main():
     args = parser.parse_args()
 
     # Determine if CLI execution is forced or fallback
-    is_cli = args.headless or args.list_drives or args.erase or args.show or not GUI_AVAILABLE
+    is_cli = (
+        args.headless
+        or args.list_drives
+        or args.erase
+        or args.show
+        or args.use_saved_login
+        or args.save_login
+        or args.forget_login
+        or not GUI_AVAILABLE
+    )
     
     if is_cli:
         run_cli(args)

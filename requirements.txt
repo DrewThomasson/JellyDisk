@@ -16,6 +16,9 @@ jellyfin-apiclient-python>=1.9.2
 # HTTP requests (fallback/utilities)
 requests>=2.31.0
 
+# Secure credential storage (Keychain / Credential Manager / Secret Service)
+keyring>=25.0.0
+
 # ISO Creation
 pycdlib>=1.14.0
 
