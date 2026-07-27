@@ -200,6 +200,8 @@ class DVDPreviewRenderer:
         disc_preview_path: Optional[Path],
         backdrop_path: Optional[Path] = None,
         case_angle: int = 0,
+        disc_num: int = 1,
+        total_discs: int = 1,
     ) -> Path:
         """Render an open keep case with its booklet and disc in place."""
         output_path = Path(output_path)
@@ -242,14 +244,17 @@ class DVDPreviewRenderer:
 
         booklet = self._open(booklet_preview_path)
         if booklet:
-            page = ImageOps.contain(booklet.convert("RGB"), (330, 410), Image.Resampling.LANCZOS)
+            page = ImageOps.contain(
+                booklet.convert("RGB"), (255, 330), Image.Resampling.LANCZOS
+            )
         else:
-            page = Image.new("RGB", (300, 400), (226, 223, 213))
+            page = Image.new("RGB", (240, 320), (226, 223, 213))
             pd = ImageDraw.Draw(page)
             pd.text((25, 35), series_name, font=self._font(24, True), fill=(20, 25, 34))
             pd.text((25, 75), season_name, font=self._font(18), fill=(55, 61, 70))
-        px = 241 - page.width // 2
-        py = 254 - page.height // 2
+        # Tuck the booklet into the lower-left clips so the wrap remains visible.
+        px = 86
+        py = 142
         page_shadow = Image.new("RGBA", (page.width + 20, page.height + 20), (0, 0, 0, 0))
         ImageDraw.Draw(page_shadow).rounded_rectangle(
             (8, 8, page_shadow.width - 2, page_shadow.height - 2),
@@ -264,6 +269,23 @@ class DVDPreviewRenderer:
 
         disc_source = self._open(disc_preview_path)
         disc_size = 376
+        dx, dy = 699 - disc_size // 2, 255 - disc_size // 2
+        if total_discs > 1:
+            # A few offset rims suggest the additional discs without cluttering
+            # the active label.
+            for offset in range(min(total_discs - 1, 3), 0, -1):
+                inset = offset * 7
+                draw.ellipse(
+                    (
+                        dx + inset,
+                        dy - inset,
+                        dx + disc_size + inset,
+                        dy + disc_size - inset,
+                    ),
+                    fill=(27, 33, 43, 255),
+                    outline=(155, 169, 184, 220),
+                    width=3,
+                )
         disc = Image.new("RGBA", (disc_size, disc_size), (0, 0, 0, 0))
         mask = Image.new("L", disc.size, 0)
         md = ImageDraw.Draw(mask)
@@ -278,7 +300,6 @@ class DVDPreviewRenderer:
         dd.ellipse((3, 3, disc_size - 3, disc_size - 3),
                    outline=(215, 224, 232, 235), width=4)
         dd.ellipse((151, 151, 225, 225), outline=(190, 201, 211, 255), width=4)
-        dx, dy = 699 - disc_size // 2, 255 - disc_size // 2
         case.alpha_composite(disc, (dx, dy))
         draw.ellipse((672, 228, 726, 282), fill=(31, 37, 48, 255),
                      outline=(135, 148, 162, 255), width=4)
@@ -313,5 +334,23 @@ class DVDPreviewRenderer:
                    fill=(238, 242, 247))
         label.text((35, 55), "Click the booklet, disc, or cover to inspect its PDF",
                    font=self._font(16), fill=(166, 180, 195))
+        if total_discs > 1:
+            badge_text = f"DISC {disc_num} OF {total_discs}"
+            badge_font = self._font(15, True)
+            badge_box = label.textbbox((0, 0), badge_text, font=badge_font)
+            badge_width = badge_box[2] - badge_box[0] + 28
+            label.rounded_rectangle(
+                (self.WIDTH - badge_width - 28, 22, self.WIDTH - 28, 58),
+                radius=18,
+                fill=(22, 29, 40, 225),
+                outline=(119, 139, 160, 210),
+                width=2,
+            )
+            label.text(
+                (self.WIDTH - badge_width - 14, 31),
+                badge_text,
+                font=badge_font,
+                fill=(235, 241, 247),
+            )
         canvas.convert("RGB").save(output_path, "PNG", optimize=True)
         return output_path

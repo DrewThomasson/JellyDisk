@@ -700,6 +700,14 @@ class JellyDiscApp(_BaseClass):
         )
         self.preview_mode_switch.pack(fill="x", padx=14, pady=(2, 4))
 
+        self.preview_disc_var = ctk.StringVar(value="Disc 1")
+        self.preview_disc_switch = ctk.CTkSegmentedButton(
+            preview_card,
+            values=["Disc 1"],
+            variable=self.preview_disc_var,
+            command=self._on_preview_disc_changed,
+        )
+
         self.preview_label = ctk.CTkLabel(
             preview_card,
             text="Select a season to preview its case and disc.",
@@ -716,6 +724,8 @@ class JellyDiscApp(_BaseClass):
             height=6,
         )
         self.preview_frame_paths = []
+        self.preview_disc_frames = {}
+        self.preview_disc_documents = {}
         self.preview_frame_index = 0
         self.preview_drag_x = None
         self.preview_drag_origin = None
@@ -1350,6 +1360,10 @@ class JellyDiscApp(_BaseClass):
         self.continue_btn.configure(state="disabled")
         self.refresh_preview_btn.configure(state="disabled")
         self.preview_frame_paths = []
+        self.preview_disc_frames = {}
+        self.preview_disc_documents = {}
+        self.preview_disc_switch.pack_forget()
+        self._hide_preview_loading()
         self._clear_package_preview_image("Choose a season to build its preview.")
         for widget in self.episodes_frame.winfo_children():
             widget.destroy()
@@ -1537,13 +1551,16 @@ class JellyDiscApp(_BaseClass):
 
         self.refresh_preview_btn.configure(state="disabled")
         self.preview_frame_paths = []
+        self.preview_disc_frames = {}
+        self.preview_disc_documents = {}
+        self.preview_disc_switch.pack_forget()
         self.preview_documents = {}
         self.menu_preview_screens = {}
         for button in self.preview_document_buttons.values():
             button.configure(state="disabled")
         self._clear_package_preview_image("Loading artwork…")
         self._show_preview_loading()
-        total_preview_steps = len(season.episodes) + 15
+        total_preview_steps = len(season.episodes) + 7 + (8 * disc_count)
         completed_preview_steps = 0
         self.preview_status.configure(
             text=f"Preparing preview — 0 of {total_preview_steps}"
@@ -1609,8 +1626,6 @@ class JellyDiscApp(_BaseClass):
                 cover_png = preview_dir / "case-cover.png"
                 booklet_pdf = preview_dir / "episode-booklet.pdf"
                 booklet_png = preview_dir / "episode-booklet.png"
-                disc_pdf = preview_dir / "disc-label.pdf"
-                disc_png = preview_dir / "disc-label.png"
                 common = {
                     "series_name": series.name,
                     "season_name": season.name,
@@ -1639,23 +1654,39 @@ class JellyDiscApp(_BaseClass):
                     preview_path=booklet_png,
                 )
                 advance_preview("Rendered episode booklet")
-                art_gen.generate_disc_label(
-                    series_name=series.name,
-                    season_name=season.name,
-                    disc_num=1,
-                    total_discs=disc_count,
-                    episodes=season.episodes,
-                    backdrop_path=backdrop_path,
-                    logo_path=logo_path,
-                    output_path=disc_pdf,
-                    preview_path=disc_png,
-                )
-                advance_preview("Rendered disc label")
                 documents = {
                     "cover": (cover_pdf, cover_png),
                     "booklet": (booklet_pdf, booklet_png),
-                    "disc": (disc_pdf, disc_png),
                 }
+                disc_documents = {}
+                for disc_num in range(1, disc_count + 1):
+                    disc_pdf = preview_dir / f"disc-{disc_num}-label.pdf"
+                    disc_png = preview_dir / f"disc-{disc_num}-label.png"
+                    if self.disc_plans and disc_num <= len(self.disc_plans):
+                        episode_numbers = {
+                            job.episode_index
+                            for job in self.disc_plans[disc_num - 1].episodes
+                        }
+                        disc_episodes = [
+                            episode
+                            for episode in season.episodes
+                            if episode.index_number in episode_numbers
+                        ]
+                    else:
+                        disc_episodes = season.episodes
+                    art_gen.generate_disc_label(
+                        series_name=series.name,
+                        season_name=season.name,
+                        disc_num=disc_num,
+                        total_discs=disc_count,
+                        episodes=disc_episodes,
+                        backdrop_path=backdrop_path,
+                        logo_path=logo_path,
+                        output_path=disc_pdf,
+                        preview_path=disc_png,
+                    )
+                    disc_documents[disc_num] = (disc_pdf, disc_png)
+                    advance_preview(f"Rendered disc {disc_num} label")
                 menu_style = (
                     MenuStyle.RETRO if selected_menu_style == "Retro"
                     else MenuStyle.MODERN
@@ -1794,28 +1825,43 @@ class JellyDiscApp(_BaseClass):
                 )
                 screens["_trivia_questions"] = questions
                 advance_preview("Rendered DVD menus")
-                frame_paths = []
+                disc_frames = {}
                 renderer = DVDPreviewRenderer()
-                for angle in (-60, -40, -20, 0, 20, 40, 60):
-                    output_path = preview_dir / f"package-preview-{angle:+03d}.png"
-                    renderer.render_open_case(
-                        output_path=output_path,
-                        series_name=series.name,
-                        season_name=season.name,
-                        cover_preview_path=cover_png,
-                        booklet_preview_path=booklet_png,
-                        disc_preview_path=disc_png,
-                        backdrop_path=backdrop_path,
-                        case_angle=angle,
-                    )
-                    frame_paths.append(output_path)
-                    advance_preview(
-                        f"Rendered package view {len(frame_paths)} of 7"
-                    )
+                for disc_num, (_, disc_png) in disc_documents.items():
+                    frame_paths = []
+                    for angle in (-60, -40, -20, 0, 20, 40, 60):
+                        output_path = (
+                            preview_dir
+                            / f"package-disc-{disc_num}-{angle:+03d}.png"
+                        )
+                        renderer.render_open_case(
+                            output_path=output_path,
+                            series_name=series.name,
+                            season_name=season.name,
+                            cover_preview_path=cover_png,
+                            booklet_preview_path=booklet_png,
+                            disc_preview_path=disc_png,
+                            backdrop_path=backdrop_path,
+                            case_angle=angle,
+                            disc_num=disc_num,
+                            total_discs=disc_count,
+                        )
+                        frame_paths.append(output_path)
+                        advance_preview(
+                            f"Rendered Disc {disc_num} view "
+                            f"{len(frame_paths)} of 7"
+                        )
+                    disc_frames[disc_num] = frame_paths
                 self.after(
                     0,
                     lambda: self._show_package_preview(
-                        frame_paths, 3, documents, screens, series_id, season_id
+                        disc_frames,
+                        3,
+                        documents,
+                        disc_documents,
+                        screens,
+                        series_id,
+                        season_id,
                     ),
                 )
             except Exception as exc:
@@ -1831,9 +1877,10 @@ class JellyDiscApp(_BaseClass):
 
     def _show_package_preview(
         self,
-        frame_paths: list[Path],
+        disc_frames: dict[int, list[Path]],
         frame_index: int,
         documents: dict,
+        disc_documents: dict[int, tuple[Path, Path]],
         menu_screens: dict,
         series_id: str,
         season_id: str,
@@ -1846,11 +1893,28 @@ class JellyDiscApp(_BaseClass):
             or self.selected_season.id != season_id
         ):
             return
-        self.preview_frame_paths = frame_paths
+        self.preview_disc_frames = disc_frames
+        self.preview_disc_documents = disc_documents
+        self.preview_disc_var.set("Disc 1")
+        self.preview_frame_paths = disc_frames.get(1, [])
         self.preview_frame_index = frame_index
         self.preview_documents = documents
+        if 1 in disc_documents:
+            self.preview_documents["disc"] = disc_documents[1]
         self.menu_preview_screens = menu_screens
         self._hide_preview_loading()
+        if len(disc_frames) > 1:
+            self.preview_disc_switch.configure(
+                values=[f"Disc {number}" for number in sorted(disc_frames)]
+            )
+            self.preview_disc_switch.pack(
+                fill="x",
+                padx=14,
+                pady=(2, 4),
+                before=self.preview_label,
+            )
+        else:
+            self.preview_disc_switch.pack_forget()
         for kind, button in self.preview_document_buttons.items():
             button.configure(state="normal" if kind in documents else "disabled")
         self._display_current_preview()
@@ -1859,6 +1923,30 @@ class JellyDiscApp(_BaseClass):
                 text="Drag to rotate. Click a part to inspect its printable PDF."
             )
         self.refresh_preview_btn.configure(state="normal")
+
+    def _on_preview_disc_changed(self, value):
+        """Swap the open-case artwork to the selected authored disc."""
+        try:
+            disc_num = int(str(value).split()[-1])
+        except (TypeError, ValueError):
+            return
+        frame_paths = self.preview_disc_frames.get(disc_num)
+        if not frame_paths:
+            return
+        self.preview_frame_paths = frame_paths
+        self.preview_frame_index = min(
+            self.preview_frame_index, len(frame_paths) - 1
+        )
+        if disc_num in self.preview_disc_documents:
+            self.preview_documents["disc"] = self.preview_disc_documents[disc_num]
+        if self.preview_mode.get() == "Package":
+            self._display_package_preview_frame()
+            self.preview_status.configure(
+                text=(
+                    f"Showing Disc {disc_num} of {len(self.preview_disc_frames)}. "
+                    "Drag to rotate or click an item to inspect it."
+                )
+            )
 
     def _display_package_preview_frame(self):
         if not self.preview_frame_paths:
@@ -1889,11 +1977,19 @@ class JellyDiscApp(_BaseClass):
 
     def _on_preview_mode_changed(self, _value=None):
         if self.preview_mode.get() == "DVD menu":
+            self.preview_disc_switch.pack_forget()
             self.document_buttons_frame.pack_forget()
             self.menu_preview_controls.pack(fill="x", padx=14, pady=(2, 2),
                                             before=self.preview_status)
             self._start_menu_audio()
         else:
+            if len(self.preview_disc_frames) > 1:
+                self.preview_disc_switch.pack(
+                    fill="x",
+                    padx=14,
+                    pady=(2, 4),
+                    before=self.preview_label,
+                )
             self.menu_preview_controls.pack_forget()
             self.document_buttons_frame.pack(fill="x", padx=14, pady=(2, 2),
                                              before=self.preview_status)
@@ -2236,6 +2332,9 @@ class JellyDiscApp(_BaseClass):
         )
         self.preview_status.configure(text=f"Could not build preview: {error}")
         self.preview_frame_paths = []
+        self.preview_disc_frames = {}
+        self.preview_disc_documents = {}
+        self.preview_disc_switch.pack_forget()
         self.preview_documents = {}
         for button in self.preview_document_buttons.values():
             button.configure(state="disabled")
