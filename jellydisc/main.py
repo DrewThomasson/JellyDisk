@@ -710,6 +710,11 @@ class JellyDiscApp(_BaseClass):
         self.preview_label.pack(fill="both", expand=True, padx=14, pady=6)
         self.preview_ctk_image = None
         self.preview_tk_image = None
+        self.preview_loading_bar = ctk.CTkProgressBar(
+            preview_card,
+            mode="determinate",
+            height=6,
+        )
         self.preview_frame_paths = []
         self.preview_frame_index = 0
         self.preview_drag_x = None
@@ -1537,7 +1542,27 @@ class JellyDiscApp(_BaseClass):
         for button in self.preview_document_buttons.values():
             button.configure(state="disabled")
         self._clear_package_preview_image("Loading artwork…")
-        self.preview_status.configure(text="Building a preview from Jellyfin artwork…")
+        self._show_preview_loading()
+        total_preview_steps = len(season.episodes) + 15
+        completed_preview_steps = 0
+        self.preview_status.configure(
+            text=f"Preparing preview — 0 of {total_preview_steps}"
+        )
+
+        def advance_preview(label):
+            nonlocal completed_preview_steps
+            completed_preview_steps += 1
+            completed = completed_preview_steps
+            self.after(
+                0,
+                lambda: self._update_preview_loading(
+                    completed,
+                    total_preview_steps,
+                    label,
+                    series_id,
+                    season_id,
+                ),
+            )
 
         def download_optional(url, path):
             if not url:
@@ -1554,22 +1579,29 @@ class JellyDiscApp(_BaseClass):
                 poster_path = download_optional(
                     season.primary_image_url, preview_dir / "poster.jpg"
                 )
+                advance_preview("Downloaded season poster")
                 backdrop_path = download_optional(
                     series.backdrop_image_url, preview_dir / "backdrop.jpg"
                 )
+                advance_preview("Downloaded backdrop")
                 logo_path = download_optional(
                     series.logo_image_url, preview_dir / "logo.png"
                 )
+                advance_preview("Downloaded series logo")
                 theme_path = None
                 try:
                     theme_url = client.get_theme_song_url(series.id)
                     theme_path = download_optional(theme_url, preview_dir / "theme.mp3")
                 except Exception as exc:
                     logger.warning(f"Preview theme download failed: {exc}")
+                advance_preview("Checked theme music")
                 for episode in season.episodes:
                     download_optional(
                         episode.primary_image_url,
                         preview_dir / f"ep_{episode.index_number}_thumb.jpg",
+                    )
+                    advance_preview(
+                        f"Downloaded episode artwork {episode.index_number}"
                     )
 
                 art_gen = ArtGenerator(preview_dir)
@@ -1597,6 +1629,7 @@ class JellyDiscApp(_BaseClass):
                     dvd_capacity_mb=dvd_capacity_mb,
                     preview_path=cover_png,
                 )
+                advance_preview("Rendered case cover")
                 art_gen.generate_episode_folio(
                     **common,
                     output_path=booklet_pdf,
@@ -1605,6 +1638,7 @@ class JellyDiscApp(_BaseClass):
                     writers=getattr(series, "writers", []),
                     preview_path=booklet_png,
                 )
+                advance_preview("Rendered episode booklet")
                 art_gen.generate_disc_label(
                     series_name=series.name,
                     season_name=season.name,
@@ -1616,6 +1650,7 @@ class JellyDiscApp(_BaseClass):
                     output_path=disc_pdf,
                     preview_path=disc_png,
                 )
+                advance_preview("Rendered disc label")
                 documents = {
                     "cover": (cover_pdf, cover_png),
                     "booklet": (booklet_pdf, booklet_png),
@@ -1758,6 +1793,7 @@ class JellyDiscApp(_BaseClass):
                     trivia_audio_path if trivia_audio_path.exists() else None
                 )
                 screens["_trivia_questions"] = questions
+                advance_preview("Rendered DVD menus")
                 frame_paths = []
                 renderer = DVDPreviewRenderer()
                 for angle in (-60, -40, -20, 0, 20, 40, 60):
@@ -1773,6 +1809,9 @@ class JellyDiscApp(_BaseClass):
                         case_angle=angle,
                     )
                     frame_paths.append(output_path)
+                    advance_preview(
+                        f"Rendered package view {len(frame_paths)} of 7"
+                    )
                 self.after(
                     0,
                     lambda: self._show_package_preview(
@@ -1811,6 +1850,7 @@ class JellyDiscApp(_BaseClass):
         self.preview_frame_index = frame_index
         self.preview_documents = documents
         self.menu_preview_screens = menu_screens
+        self._hide_preview_loading()
         for kind, button in self.preview_document_buttons.items():
             button.configure(state="normal" if kind in documents else "disabled")
         self._display_current_preview()
@@ -2144,6 +2184,39 @@ class JellyDiscApp(_BaseClass):
         self.preview_tk_image = None
         self.preview_ctk_image = None
 
+    def _show_preview_loading(self):
+        """Show progress while preview assets are downloaded and rendered."""
+        self.preview_loading_bar.set(0)
+        self.preview_loading_bar.pack(
+            fill="x",
+            padx=18,
+            pady=(0, 4),
+            before=self.document_buttons_frame,
+        )
+
+    def _update_preview_loading(
+        self,
+        completed: int,
+        total: int,
+        label: str,
+        series_id: str,
+        season_id: str,
+    ):
+        """Update progress only for the preview that is still selected."""
+        if (
+            not self.selected_series
+            or not self.selected_season
+            or self.selected_series.id != series_id
+            or self.selected_season.id != season_id
+        ):
+            return
+        self.preview_loading_bar.set(completed / total)
+        self.preview_status.configure(text=f"{label} — {completed} of {total}")
+
+    def _hide_preview_loading(self):
+        """Stop and hide the preview activity indicator."""
+        self.preview_loading_bar.pack_forget()
+
     def _show_package_preview_error(
         self,
         error,
@@ -2157,6 +2230,7 @@ class JellyDiscApp(_BaseClass):
             or self.selected_season.id != season_id
         ):
             return
+        self._hide_preview_loading()
         self._clear_package_preview_image(
             "Preview unavailable\nYou can still continue with authoring."
         )
