@@ -1343,202 +1343,186 @@ def generate_trivia_questions(
     directors: Optional[list[str]] = None,
     writers: Optional[list[str]] = None
 ) -> list[dict]:
-    """
-    Generate trivia questions dynamically from local Jellyfin metadata fields (up to 20 questions).
-    """
-    questions = []
+    """Build up to 20 deterministic questions using only Jellyfin metadata."""
     import random
-    
-    # 1. Cast Questions (generate up to 8 distinct questions)
-    valid_actors = []
-    if actors:
-        for actor in actors:
-            if " as " in actor:
-                valid_actors.append(actor)
-                
-    if valid_actors:
-        chosen_actors = random.sample(valid_actors, min(8, len(valid_actors)))
-        for chosen in chosen_actors:
-            name, role = chosen.split(" as ", 1)
-            role = role.strip()
-            name = name.strip()
-            
-            other_names = [act.split(" as ")[0].strip() for act in actors if act != chosen]
-            fallback_names = ["Zach Hadel", "Michael Cusack", "Drew Thomasson", "John Carpenter", "Kurt Russell", "Donald Pleasence"]
-            for f in fallback_names:
-                if f not in other_names and f != name:
-                    other_names.append(f)
-                    
-            distractors = random.sample(other_names, min(len(other_names), 3))
-            while len(distractors) < 3:
-                distractors.append(f"Generic Actor {len(distractors) + 1}")
-                
-            options = distractors + [name]
-            random.shuffle(options)
-            correct_idx = options.index(name)
-            
-            questions.append({
-                "question": f"Who plays the character '{role}' in {series_name}?",
+    seed_parts = [
+        series_name,
+        season_name,
+        str(release_year or ""),
+        *[
+            f"{getattr(ep, 'index_number', getattr(ep, 'episode_index', ''))}:"
+            f"{getattr(ep, 'name', getattr(ep, 'episode_name', ''))}"
+            for ep in episodes or []
+        ],
+    ]
+    rng = random.Random("|".join(seed_parts))
+    questions = []
+
+    def add_question(prompt: str, correct: str, distractors: list[str]):
+        choices = []
+        for value in distractors:
+            text = str(value).strip()
+            if text and text != str(correct) and text not in choices:
+                choices.append(text)
+        if len(choices) < 3:
+            return
+        options = rng.sample(choices, 3) + [str(correct)]
+        rng.shuffle(options)
+        questions.append(
+            {
+                "question": prompt,
                 "options": options,
-                "correct_index": correct_idx
-            })
-            
-    # 2. Release Year Question
+                "correct_index": options.index(str(correct)),
+            }
+        )
+
+    cast = []
+    for actor in actors or []:
+        if " as " not in actor:
+            continue
+        name, role = (part.strip() for part in actor.split(" as ", 1))
+        if name and role and (name, role) not in cast:
+            cast.append((name, role))
+
+    if len(cast) >= 4:
+        actor_names = [name for name, _ in cast]
+        role_names = [role for _, role in cast]
+        for name, role in cast:
+            add_question(
+                f"Who plays {role} in {series_name}?",
+                name,
+                [candidate for candidate in actor_names if candidate != name],
+            )
+            add_question(
+                f"Which character is played by {name}?",
+                role,
+                [candidate for candidate in role_names if candidate != role],
+            )
+
+    episode_data = []
+    for episode in episodes or []:
+        title = str(
+            getattr(episode, "name", getattr(episode, "episode_name", ""))
+        ).strip()
+        number = getattr(
+            episode, "index_number", getattr(episode, "episode_index", None)
+        )
+        overview = str(getattr(episode, "overview", "") or "").strip()
+        if title and number is not None:
+            episode_data.append((episode, title, int(number), overview))
+
+    unique_titles = list(dict.fromkeys(title for _, title, _, _ in episode_data))
+    unique_numbers = list(dict.fromkeys(number for _, _, number, _ in episode_data))
+    if len(unique_titles) >= 4:
+        for _, title, number, overview in episode_data:
+            add_question(
+                f"What is the title of episode {number} in {season_name}?",
+                title,
+                [candidate for candidate in unique_titles if candidate != title],
+            )
+            if overview:
+                summary = " ".join(overview.split())
+                if len(summary) > 125:
+                    summary = summary[:122].rsplit(" ", 1)[0] + "…"
+                add_question(
+                    f'Which episode is described as: "{summary}"',
+                    title,
+                    [candidate for candidate in unique_titles if candidate != title],
+                )
+
+    if len(unique_numbers) >= 4:
+        for _, title, number, _ in episode_data:
+            add_question(
+                f'Which episode number has the title "{title}"?',
+                str(number),
+                [str(candidate) for candidate in unique_numbers if candidate != number],
+            )
+
     if release_year:
         try:
             year = int(str(release_year)[:4])
-        except ValueError:
-            year = 2024
-            
-        options = [year, year - 2, year + 3, year - 5]
-        options = list(set(options))
-        while len(options) < 4:
-            options.append(options[-1] + 1)
-        options = [str(o) for o in options]
-        
-        correct_str = str(year)
-        random.shuffle(options)
-        correct_idx = options.index(correct_str)
-        
-        questions.append({
-            "question": f"In what year was {series_name} released?",
-            "options": options,
-            "correct_index": correct_idx
-        })
-        
-    # 3. Director Questions (especially for movies)
-    if directors:
-        for idx, dir_name in enumerate(directors[:2]):  # up to 2 directors
-            other_dirs = ["Steven Spielberg", "Christopher Nolan", "Quentin Tarantino", "Martin Scorsese", "James Cameron"]
-            distractors = [d for d in other_dirs if d != dir_name]
-            distractors = random.sample(distractors, 3)
-            options = distractors + [dir_name]
-            random.shuffle(options)
-            correct_idx = options.index(dir_name)
-            
-            questions.append({
-                "question": f"Who directed the movie {series_name}?" if idx == 0 else f"Who is listed as a co-director for {series_name}?",
-                "options": options,
-                "correct_index": correct_idx
-            })
-        
-    # 4. Writer/Creator Questions
-    if writers:
-        for idx, writer_name in enumerate(writers[:2]):  # up to 2 writers
-            other_writers = ["George Lucas", "Stephen King", "Harold Ramis", "John Carpenter", "Nick Castle"]
-            distractors = [w for w in other_writers if w != writer_name]
-            distractors = random.sample(distractors, 3)
-            options = distractors + [writer_name]
-            random.shuffle(options)
-            correct_idx = options.index(writer_name)
-            
-            questions.append({
-                "question": f"Who is listed as a writer for {series_name}?" if idx == 0 else f"Who co-wrote the screenplay/teleplay for {series_name}?",
-                "options": options,
-                "correct_index": correct_idx
-            })
-        
-    # 5. Episode Questions (especially for TV shows - up to 4 distinct episodes)
-    if episodes and len(episodes) > 1:
-        chosen_eps = random.sample(episodes, min(4, len(episodes)))
-        for ep in chosen_eps:
-            real_name = getattr(ep, "name", getattr(ep, "episode_name", ""))
-            
-            fake_names = [
-                "The Lost Episode",
-                "A Very Special Occasion",
-                "Pineapple Express Incident",
-                "The Unexpected Journey",
-                "Escape from Reality",
-                "A Bad Day at the Office",
-                "The Midnight Run",
-                "Return of the Legend",
-                "The Final Chapter",
-                "A New Beginning"
-            ]
-            distractors = [f for f in fake_names if f.lower() != real_name.lower()]
-            distractors = random.sample(distractors, 3)
-            
-            options = distractors + [real_name]
-            random.shuffle(options)
-            correct_idx = options.index(real_name)
-            
-            questions.append({
-                "question": f"Which of the following is a real episode from this season?",
-                "options": options,
-                "correct_index": correct_idx
-            })
-        
-    # 6. Fallback General DVD/Movie Questions (to fill up to 20 questions if needed)
-    fallback_q = [
-        {
-            "question": "What is the standard aspect ratio of a standard definition DVD?",
-            "options": ["4:3", "16:9 Anamorphic", "2.39:1 Cinema", "1.33:1 IMAX"],
-            "correct_index": 1
-        },
-        {
-            "question": "Which video standard is traditionally used in Europe and Asia?",
-            "options": ["NTSC", "PAL", "SECAM", "ATSC"],
-            "correct_index": 1
-        },
-        {
-            "question": "Which optical disc format succeeded the DVD in 2006?",
-            "options": ["HD-DVD", "Blu-ray Disc", "LaserDisc", "VCD"],
-            "correct_index": 1
-        },
-        {
-            "question": "What does 'CSS' stand for in DVD encryption?",
-            "options": ["Content Scramble System", "Copy Security System", "Cascading Style Sheets", "Core Sector Scrambler"],
-            "correct_index": 0
-        },
-        {
-            "question": "Which DVD region code covers the United States and Canada?",
-            "options": ["Region 1", "Region 2", "Region 4", "Region 0 (All)"],
-            "correct_index": 0
-        },
-        {
-            "question": "What is the physical storage capacity of a single-layer DVD-5?",
-            "options": ["4.7 GB", "8.5 GB", "700 MB", "25 GB"],
-            "correct_index": 0
-        },
-        {
-            "question": "What is the physical storage capacity of a dual-layer DVD-9?",
-            "options": ["4.7 GB", "8.5 GB", "9.4 GB", "15 GB"],
-            "correct_index": 1
-        },
-        {
-            "question": "Which file system is standard on DVD-Video discs?",
-            "options": ["FAT32", "NTFS", "UDF (Universal Disk Format)", "ISO 9660"],
-            "correct_index": 2
-        },
-        {
-            "question": "What format is standard DVD-Video compressed in?",
-            "options": ["MPEG-1", "MPEG-2", "H.264 / MPEG-4", "AV1"],
-            "correct_index": 1
-        },
-        {
-            "question": "Which analog copy protection system was built into most DVD players?",
-            "options": ["Macrovision", "FairPlay", "Widevine", "HDCP"],
-            "correct_index": 0
-        },
-        {
-            "question": "What is the term for fitting a 16:9 video onto a 4:3 DVD screen using black bars?",
-            "options": ["Anamorphic", "Letterboxing", "Pan and Scan", "Pillarboxing"],
-            "correct_index": 1
-        },
-        {
-            "question": "In what year were the first commercial DVD players and discs released in the US?",
-            "options": ["1995", "1997", "1999", "2001"],
-            "correct_index": 1
-        }
+        except (TypeError, ValueError):
+            year = None
+        if year:
+            add_question(
+                f"In what year was {series_name} released?",
+                str(year),
+                [str(year - 1), str(year + 1), str(year - 2), str(year + 2)],
+            )
+
+    crew = list(dict.fromkeys(
+        [name for name, _ in cast] + list(directors or []) + list(writers or [])
+    ))
+    if len(crew) >= 4:
+        for director in dict.fromkeys(directors or []):
+            add_question(
+                f"Who is credited as a director of {series_name}?",
+                director,
+                [person for person in crew if person != director],
+            )
+        for writer in dict.fromkeys(writers or []):
+            add_question(
+                f"Who is credited as a writer of {series_name}?",
+                writer,
+                [person for person in crew if person != writer],
+            )
+
+    bonus_questions = [
+        ("What is the first test episode of a proposed series called?", "Pilot",
+         ["Finale", "Special", "Epilogue"]),
+        ("What is a surprise appearance by a well-known performer called?", "Cameo",
+         ["Reboot", "Recap", "Cold open"]),
+        ("What is a suspenseful ending intended to bring viewers back called?", "Cliffhanger",
+         ["Montage", "Flashback", "Prologue"]),
+        ("What is music composed specifically for a film or show called?", "Score",
+         ["Subtitle", "Foley", "Dubbing"]),
+        ("What is a story set before an earlier story called?", "Prequel",
+         ["Sequel", "Remake", "Spin-off"]),
+        ("What is a story continuing an earlier story called?", "Sequel",
+         ["Pilot", "Prequel", "Anthology"]),
+        ("What is an established fictional continuity commonly called?", "Canon",
+         ["Blocking", "Coverage", "Slate"]),
+        ("What is a group of principal performers called?", "Ensemble cast",
+         ["Second unit", "Focus group", "Camera crew"]),
+        ("What is dialogue added after filming called?", "ADR",
+         ["CGI", "Foley", "Blocking"]),
+        ("What is the recreation of everyday sound effects called?", "Foley",
+         ["Scoring", "Casting", "Color grading"]),
+        ("What is a sequence showing events across compressed time called?", "Montage",
+         ["Table read", "Cold open", "Epilogue"]),
+        ("What is a scene occurring earlier than the main timeline called?", "Flashback",
+         ["Flash-forward", "Tag scene", "B-plot"]),
+        ("What is the short scene before the opening titles called?", "Cold open",
+         ["Intermission", "End credit", "Act break"]),
+        ("What is a series featuring different stories or casts called?", "Anthology",
+         ["Serial", "Reboot", "Miniseries"]),
+        ("What is a new production of an older story called?", "Remake",
+         ["Sequel", "Recap", "Crossover"]),
+        ("What is a new series centered on an existing character called?", "Spin-off",
+         ["Reunion", "Adaptation", "Director's cut"]),
+        ("What is the written blueprint for a film or episode called?", "Screenplay",
+         ["Storyboard", "Call sheet", "Shot list"]),
+        ("What is a rehearsal where performers read the script together called?", "Table read",
+         ["Screen test", "Tech scout", "Pickup"]),
+        ("What is the visual planning of shots in drawn panels called?", "Storyboarding",
+         ["Dubbing", "Compositing", "Looping"]),
+        ("What is the process of choosing performers for roles called?", "Casting",
+         ["Blocking", "Editing", "Mixing"]),
+        ("What is a limited narrative running alongside the main story called?", "B-plot",
+         ["Pilot", "Teaser trailer", "Voice-over"]),
+        ("What is recording dialogue in another language called?", "Dubbing",
+         ["Foley", "Scoring", "Tracking"]),
+        ("What is adjusting the colors of finished footage called?", "Color grading",
+         ["Sound mixing", "Set dressing", "Location scouting"]),
+        ("What is filming a scene again after principal photography called?", "Reshoot",
+         ["Recap", "Reboot", "Rehearsal"]),
     ]
-    
-    for f_q in fallback_q:
+    rng.shuffle(bonus_questions)
+    for prompt, correct, distractors in bonus_questions:
         if len(questions) >= 20:
             break
-        # Avoid duplicate questions
-        if f_q["question"] not in [q["question"] for q in questions]:
-            questions.append(f_q)
-            
-    return questions[:20]
+        add_question(prompt, correct, distractors)
 
+    # Keep every authored preview/build stable while varying question types.
+    rng.shuffle(questions)
+    return questions[:20]

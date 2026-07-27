@@ -381,6 +381,10 @@ class JellyDiscApp(_BaseClass):
         self.jellyfin_client: Optional[JellyfinClient] = None
         self.selected_series: Optional[Series] = None
         self.selected_season: Optional[Season] = None
+        self.selected_seasons: list[Season] = []
+        self.season_disc_plans: dict[str, list[DiscPlan]] = {}
+        self.loaded_season_ids: set[str] = set()
+        self.loading_season_ids: set[str] = set()
         self.disc_plans: list[DiscPlan] = []
         
         # Ensure working directories exist
@@ -682,6 +686,28 @@ class JellyDiscApp(_BaseClass):
         )
         self.season_dropdown.pack(side="left", fill="x", expand=True)
 
+        self.season_selection_frame = ctk.CTkFrame(
+            detail_card, fg_color="transparent"
+        )
+        self.season_selection_frame.pack(fill="x", padx=18, pady=(0, 10))
+        self.season_check_vars = {}
+        self.season_checkboxes = {}
+        self.season_collection_label = ctk.CTkLabel(
+            self.season_selection_frame,
+            text="Select one or more seasons for this project.",
+            anchor="w",
+            font=ctk.CTkFont(size=12),
+            text_color=("gray42", "gray70"),
+        )
+        self.season_collection_label.pack(fill="x")
+        self.season_checks_container = ctk.CTkScrollableFrame(
+            self.season_selection_frame,
+            fg_color="transparent",
+            orientation="horizontal",
+            height=52,
+        )
+        self.season_checks_container.pack(fill="x", pady=(5, 0))
+
         self.episodes_frame = ctk.CTkScrollableFrame(
             detail_card,
             label_text="Episodes",
@@ -861,6 +887,15 @@ class JellyDiscApp(_BaseClass):
             state="disabled",
         )
         self.refresh_preview_btn.pack(side="right")
+
+        self.preview_season_var = ctk.StringVar(value="")
+        self.preview_season_dropdown = ctk.CTkComboBox(
+            preview_card,
+            values=[],
+            variable=self.preview_season_var,
+            command=self._on_preview_season_changed,
+            height=34,
+        )
 
         self.preview_mode = ctk.StringVar(value="Package")
         self.preview_mode_switch = ctk.CTkSegmentedButton(
@@ -1688,7 +1723,18 @@ class JellyDiscApp(_BaseClass):
         """Handle show selection."""
         self.selected_series = series
         self.selected_season = None
+        self.selected_seasons = []
+        self.season_disc_plans = {}
+        self.loaded_season_ids = set()
+        self.loading_season_ids = set()
         self.disc_plans = []
+        for checkbox in self.season_checkboxes.values():
+            checkbox.destroy()
+        self.season_checkboxes.clear()
+        self.season_check_vars.clear()
+        self.season_collection_label.configure(
+            text="Select one or more seasons for this project."
+        )
         for button in self.show_widgets:
             selected = getattr(button, "_library_item_id", None) == series.id
             button.configure(
@@ -1714,6 +1760,7 @@ class JellyDiscApp(_BaseClass):
         self.preview_disc_frames = {}
         self.preview_disc_documents = {}
         self.preview_disc_switch.pack_forget()
+        self.preview_season_dropdown.pack_forget()
         self._hide_preview_loading()
         self._clear_package_preview_image("Choose a season to build its preview.")
         for widget in self.episodes_frame.winfo_children():
@@ -1761,6 +1808,26 @@ class JellyDiscApp(_BaseClass):
         
         season_names = [s.name for s in seasons]
         self.season_dropdown.configure(values=season_names, state="normal")
+        for checkbox in self.season_checkboxes.values():
+            checkbox.destroy()
+        self.season_checkboxes.clear()
+        self.season_check_vars.clear()
+        for index, season in enumerate(seasons):
+            selected = index == 0
+            variable = ctk.BooleanVar(value=selected)
+            checkbox = ctk.CTkCheckBox(
+                self.season_checks_container,
+                text=season.name,
+                variable=variable,
+                command=lambda item=season: self._on_season_collection_toggled(item),
+                checkbox_width=20,
+                checkbox_height=20,
+            )
+            checkbox.pack(side="left", padx=(0, 14), pady=3)
+            self.season_check_vars[season.id] = variable
+            self.season_checkboxes[season.id] = checkbox
+        self.selected_seasons = seasons[:1]
+        self._update_season_collection_label()
         
         if season_names:
             self.season_dropdown.set(season_names[0])
@@ -1776,12 +1843,18 @@ class JellyDiscApp(_BaseClass):
         season = self.seasons_data[season_name]
         self.selected_season = season
         series = self.selected_series
+        if season.id in self.loaded_season_ids:
+            self._populate_episodes(season.episodes, series.id, season.id)
+            return
+        if season.id in self.loading_season_ids:
+            return
         
         # Load episodes
         if not self.jellyfin_client or not series:
             return
         
         self._set_status(f"Loading episodes...")
+        self.loading_season_ids.add(season.id)
         self.select_season_btn.configure(state="disabled")
         for widget in self.episodes_frame.winfo_children():
             widget.destroy()
@@ -1807,15 +1880,68 @@ class JellyDiscApp(_BaseClass):
             except Exception as e:
                 self.after(
                     0,
-                    lambda ex=e: self._show_library_error("load episodes", ex),
+                    lambda ex=e, sid=season.id:
+                        self._show_season_load_error(sid, ex),
                 )
         
         threading.Thread(target=load, daemon=True).start()
+
+    def _show_season_load_error(self, season_id: str, error):
+        self.loading_season_ids.discard(season_id)
+        self._show_library_error("load episodes", error)
+
+    def _on_season_collection_toggled(self, season: Season):
+        """Add or remove a season while keeping one active for inspection."""
+        selected = [
+            item
+            for item in self.seasons_data.values()
+            if self.season_check_vars.get(item.id)
+            and self.season_check_vars[item.id].get()
+        ]
+        self.selected_seasons = selected
+        self.season_disc_plans = {}
+        self._update_season_collection_label()
+        self.select_season_btn.configure(state="disabled")
+        if (
+            self.season_check_vars[season.id].get()
+            and season.id not in self.loaded_season_ids
+        ):
+            self.season_dropdown.set(season.name)
+            self._on_season_selected(season.name)
+        else:
+            self._update_collection_continue_state()
+
+    def _update_season_collection_label(self):
+        count = len(self.selected_seasons)
+        if count == 0:
+            text = "Choose at least one season."
+        elif count == 1:
+            text = "1 season selected."
+        else:
+            text = f"{count} seasons selected · each keeps its own disc set."
+        self.season_collection_label.configure(text=text)
+
+    def _update_collection_continue_state(self):
+        ready = bool(self.selected_seasons) and all(
+            season.id in self.loaded_season_ids
+            for season in self.selected_seasons
+        )
+        self.select_season_btn.configure(state="normal" if ready else "disabled")
+        self.select_season_btn.configure(
+            text=(
+                f"Continue with {len(self.selected_seasons)} seasons  →"
+                if len(self.selected_seasons) > 1
+                else "Continue with this season  →"
+            )
+        )
     
     def _populate_episodes(
         self, episodes: list[Episode], series_id: str, season_id: str
     ):
         """Populate the episodes list."""
+        self.loaded_season_ids.add(season_id)
+        self.loading_season_ids.discard(season_id)
+        self._update_collection_continue_state()
         if (
             not self.selected_series
             or not self.selected_season
@@ -1851,7 +1977,6 @@ class JellyDiscApp(_BaseClass):
                 text_color=("gray42", "gray68"),
             ).pack(side="right", padx=10, pady=9)
         
-        self.select_season_btn.configure(state="normal")
         self._set_status(f"Found {len(episodes)} episodes")
 
     def _show_library_error(self, action: str, error):
@@ -1866,27 +1991,81 @@ class JellyDiscApp(_BaseClass):
                 pass
     
     def _on_author_season(self):
-        """Handle author season button click."""
-        if not self.selected_season or not self.selected_series:
+        """Prepare one or more selected seasons for preview and authoring."""
+        seasons = self.selected_seasons or (
+            [self.selected_season] if self.selected_season else []
+        )
+        if not seasons or not self.selected_series:
             return
-        
-        # Calculate disc requirements
-        total_minutes = sum(ep.runtime_minutes for ep in self.selected_season.episodes)
-        
-        # Update config tab summary
+
+        self.season_disc_plans = {
+            season.id: self._plan_season_discs(season)
+            for season in seasons
+        }
+        if self.selected_season not in seasons:
+            self.selected_season = seasons[0]
+        self.disc_plans = self.season_disc_plans[self.selected_season.id]
+        total_minutes = sum(
+            episode.runtime_minutes
+            for season in seasons
+            for episode in season.episodes
+        )
+        total_episodes = sum(len(season.episodes) for season in seasons)
+        total_discs = sum(
+            len(plans) for plans in self.season_disc_plans.values()
+        )
+        season_text = (
+            seasons[0].name
+            if len(seasons) == 1
+            else f"{len(seasons)} seasons"
+        )
         self.summary_label.configure(
             text=f"Series: {self.selected_series.name}\n"
-                 f"Season: {self.selected_season.name}\n"
-                 f"Episodes: {len(self.selected_season.episodes)}\n"
+                 f"Selection: {season_text}\n"
+                 f"Episodes: {total_episodes} · Discs: {total_discs}\n"
                  f"Total Runtime: {total_minutes:.0f} minutes",
             text_color="white"
         )
-        
-        # Create disc plan
-        self._create_disc_plan()
-        
-        # Switch to config tab
+        self.disc_info_label.configure(
+            text="\n".join(
+                f"{season.name}: {len(self.season_disc_plans[season.id])} disc(s)"
+                for season in seasons
+            ),
+            text_color="orange" if total_discs > 1 else "green",
+        )
+        self.start_btn.configure(state="normal")
+        self.continue_btn.configure(state="normal")
+        self.refresh_preview_btn.configure(state="normal")
+        if len(seasons) > 1:
+            self.preview_season_dropdown.configure(
+                values=[season.name for season in seasons]
+            )
+            self.preview_season_var.set(self.selected_season.name)
+            self.preview_season_dropdown.pack(
+                fill="x",
+                padx=14,
+                pady=(0, 6),
+                before=self.preview_mode_switch,
+            )
+        else:
+            self.preview_season_dropdown.pack_forget()
+        self._request_package_preview()
         self.tabview.set("3  Preview")
+
+    def _on_preview_season_changed(self, season_name: str):
+        """Switch the live package preview within a season collection."""
+        season = next(
+            (
+                item for item in self.selected_seasons
+                if item.name == season_name
+            ),
+            None,
+        )
+        if not season or season is self.selected_season:
+            return
+        self.selected_season = season
+        self.disc_plans = self.season_disc_plans.get(season.id, [])
+        self._request_package_preview()
     
     @property
     def current_staging_dir(self) -> Path:
@@ -1899,6 +2078,35 @@ class JellyDiscApp(_BaseClass):
         folder = self.config.staging_dir / series_folder / season_folder
         folder.mkdir(parents=True, exist_ok=True)
         return folder
+
+    def _staging_dir_for_season(self, season: Season) -> Path:
+        series_folder = sanitize_filename(self.selected_series.name)
+        season_folder = sanitize_filename(season.name)
+        folder = self.config.staging_dir / series_folder / season_folder
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    def _plan_season_discs(self, season: Season) -> list[DiscPlan]:
+        """Plan a season independently so collection discs never mix seasons."""
+        dvd_capacity_mb = (
+            7900 if "DVD-9" in self.disc_size_var.get() else 4100
+        )
+        staging_dir = self._staging_dir_for_season(season)
+        transcoder = Transcoder(staging_dir, dvd_capacity_mb=dvd_capacity_mb)
+        jobs = [
+            TranscodeJob(
+                input_path=(
+                    self.jellyfin_client.get_stream_url(episode.id)
+                    if self.jellyfin_client else ""
+                ),
+                output_path=staging_dir / f"ep{episode.index_number:02d}.mpg",
+                episode_name=episode.name,
+                episode_index=episode.index_number,
+                duration_seconds=episode.runtime_minutes * 60,
+            )
+            for episode in season.episodes
+        ]
+        return transcoder.plan_disc_spanning(jobs)
 
     def _request_package_preview(self):
         """Download lightweight artwork and render the pre-build package preview."""
@@ -2718,7 +2926,18 @@ class JellyDiscApp(_BaseClass):
                 "which may make them unreadable or prone to freezing/stuttering on older or legacy standalone DVD players.\n\n"
                 "If you are burning for legacy hardware compatibility, DVD-5 (Single Layer) is highly recommended."
             )
-        self._create_disc_plan()
+        if len(self.selected_seasons) > 1 and self.season_disc_plans:
+            self.season_disc_plans = {
+                season.id: self._plan_season_discs(season)
+                for season in self.selected_seasons
+            }
+            if self.selected_season:
+                self.disc_plans = self.season_disc_plans[
+                    self.selected_season.id
+                ]
+            self._request_package_preview()
+        else:
+            self._create_disc_plan()
 
     def _create_disc_plan(self):
         """Create a disc spanning plan for the selected season."""
@@ -2755,6 +2974,7 @@ class JellyDiscApp(_BaseClass):
                 jobs.append(job)
             
             self.disc_plans = transcoder.plan_disc_spanning(jobs)
+            self.season_disc_plans[self.selected_season.id] = self.disc_plans
             
             # Update burn tab
             num_discs = len(self.disc_plans)
@@ -2802,15 +3022,23 @@ class JellyDiscApp(_BaseClass):
             return
         
         settings = self._snapshot_authoring_settings()
+        projects = self._snapshot_season_projects()
         self.start_btn.configure(state="disabled")
+        self.preview_season_dropdown.configure(state="disabled")
         
         def process():
             try:
-                self._run_authoring_pipeline(burn=False, settings=settings)
+                self._run_season_projects(
+                    projects, burn=False, settings=settings
+                )
             except Exception as e:
                 self.after(0, lambda ex=e: self._show_pipeline_error(ex))
             finally:
                 self.after(0, lambda: self.start_btn.configure(state="normal"))
+                self.after(
+                    0,
+                    lambda: self.preview_season_dropdown.configure(state="normal"),
+                )
         
         threading.Thread(target=process, daemon=True).start()
     
@@ -2836,17 +3064,66 @@ class JellyDiscApp(_BaseClass):
             return
         
         settings = self._snapshot_authoring_settings()
+        projects = self._snapshot_season_projects()
         self.start_btn.configure(state="disabled")
+        self.preview_season_dropdown.configure(state="disabled")
         
         def process():
             try:
-                self._run_authoring_pipeline(burn=True, settings=settings)
+                self._run_season_projects(
+                    projects, burn=True, settings=settings
+                )
             except Exception as e:
                 self.after(0, lambda ex=e: self._show_pipeline_error(ex))
             finally:
                 self.after(0, lambda: self.start_btn.configure(state="normal"))
+                self.after(
+                    0,
+                    lambda: self.preview_season_dropdown.configure(state="normal"),
+                )
         
         threading.Thread(target=process, daemon=True).start()
+
+    def _snapshot_season_projects(self):
+        seasons = self.selected_seasons or [self.selected_season]
+        return [
+            (season, list(self.season_disc_plans.get(season.id, self.disc_plans)))
+            for season in seasons
+            if season
+        ]
+
+    def _run_season_projects(self, projects, burn: bool, settings: dict):
+        """Author selected seasons sequentially while preserving disc boundaries."""
+        original_season = self.selected_season
+        original_plans = self.disc_plans
+        collection = len(projects) > 1
+        collection_iso_files = []
+        try:
+            for index, (season, plans) in enumerate(projects, start=1):
+                self.selected_season = season
+                self.disc_plans = plans
+                project_settings = dict(settings)
+                if collection:
+                    # Each season receives its own deterministic ISO filename.
+                    project_settings["iso_path"] = ""
+                    self._log(
+                        f"\n=== Season project {index} of {len(projects)}: "
+                        f"{season.name} ==="
+                    )
+                collection_iso_files.extend(
+                    self._run_authoring_pipeline(
+                        burn=burn, settings=project_settings
+                    )
+                )
+            if collection_iso_files:
+                self.after(
+                    0,
+                    lambda files=list(collection_iso_files):
+                        self._enable_finished_preview(files),
+                )
+        finally:
+            self.selected_season = original_season
+            self.disc_plans = original_plans
 
     def _show_pipeline_error(self, error):
         message = str(error)
@@ -3421,25 +3698,25 @@ class JellyDiscApp(_BaseClass):
                 trivia_audio = ensure_default_trivia_audio(self.config.assets_dir, self._log)
                 
                 from jellydisc.menu_builder import generate_trivia_questions
-                rel_year = getattr(self.selected_series, "release_year", "")
+                rel_year = getattr(
+                    self.selected_series,
+                    "year",
+                    getattr(self.selected_series, "release_year", ""),
+                )
                 eps_list = self.selected_season.episodes
                 act_list = getattr(self.selected_series, "actors", [])
                 dir_list = getattr(self.selected_series, "directors", [])
                 wri_list = getattr(self.selected_series, "writers", [])
                 
-                questions = self.menu_preview_screens.get(
-                    "_trivia_questions", []
+                questions = generate_trivia_questions(
+                    series_name=self.selected_series.name,
+                    season_name=self.selected_season.name,
+                    release_year=rel_year,
+                    episodes=eps_list,
+                    actors=act_list,
+                    directors=dir_list,
+                    writers=wri_list
                 )
-                if not questions:
-                    questions = generate_trivia_questions(
-                        series_name=self.selected_series.name,
-                        season_name=self.selected_season.name,
-                        release_year=rel_year,
-                        episodes=eps_list,
-                        actors=act_list,
-                        directors=dir_list,
-                        writers=wri_list
-                    )
                 
                 t_questions, t_wrong, t_win = menu_builder.generate_trivia_menus(
                     questions, backdrop_path, logo_path
@@ -3676,6 +3953,7 @@ class JellyDiscApp(_BaseClass):
                 0,
                 lambda files=list(iso_files): self._enable_finished_preview(files),
             )
+        return iso_files
 
     def _enable_finished_preview(self, iso_files: list[Path]):
         self.finished_iso_files = iso_files
