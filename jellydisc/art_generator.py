@@ -274,7 +274,8 @@ class ArtGenerator:
                           directors: Optional[List[str]] = None,
                           writers: Optional[List[str]] = None,
                           dvd_capacity_mb: int = 4100,
-                          preview_path: Optional[Path] = None) -> Path:
+                          preview_path: Optional[Path] = None,
+                          overlay_front_titles: bool = False) -> Path:
         """
         Generate a printable DVD case cover wrap (back, spine, and front).
         Saves as a high-quality PDF at 300 DPI.
@@ -292,7 +293,10 @@ class ArtGenerator:
         
         # 1. FRONT COVER (Right Side: x = 1695 to 3224)
         front_x = COV_PAGE + COV_SPINE
-        if season_poster_path and season_poster_path.exists():
+        has_finished_poster = bool(
+            season_poster_path and season_poster_path.exists()
+        )
+        if has_finished_poster:
             try:
                 poster = Image.open(season_poster_path)
                 poster_resized = self._resize_to_cover(poster, COV_PAGE, COV_HEIGHT)
@@ -308,9 +312,13 @@ class ArtGenerator:
             except Exception as e:
                 logger.error(f"Failed to draw backdrop on front cover: {e}")
                 
+        # Jellyfin posters are usually finished key art with their own title
+        # treatment. Preserve them unless the user explicitly requests overlays.
+        draw_front_titles = overlay_front_titles or not has_finished_poster
+
         # Draw series logo or text title on front cover
         logo_drawn = False
-        if logo_path and logo_path.exists():
+        if draw_front_titles and logo_path and logo_path.exists():
             try:
                 logo = Image.open(logo_path).convert('RGBA')
                 # Scale logo to fit front cover nicely (max width 1000, max height 400)
@@ -324,7 +332,7 @@ class ArtGenerator:
                 logger.error(f"Failed to paste logo on front cover: {e}")
 
         # Draw series name text if logo failed or doesn't exist
-        if not logo_drawn:
+        if draw_front_titles and not logo_drawn:
             font_title = self._get_font(bold=True, size=80)
             title_lines = self._wrap_text(series_name.upper(), font_title, COV_PAGE - 200, draw)
             y_offset = 300
@@ -340,7 +348,7 @@ class ArtGenerator:
                 y_offset += 100
 
         # Draw season name on front cover (lower-middle)
-        if season_name.lower() != "movie":
+        if draw_front_titles and season_name.lower() != "movie":
             font_season = self._get_font(bold=True, size=55)
             season_str = season_name.upper()
             try:

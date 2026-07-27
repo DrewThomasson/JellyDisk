@@ -867,6 +867,17 @@ class JellyDiscApp(_BaseClass):
             variable=self.trivia_var
         )
         trivia_check.grid(row=10, column=1, sticky="w", padx=10, pady=10)
+
+        self.overlay_cover_titles_var = ctk.BooleanVar(value=False)
+        overlay_cover_titles_check = ctk.CTkCheckBox(
+            settings_card,
+            text="Add title text over poster",
+            variable=self.overlay_cover_titles_var,
+            command=self._request_package_preview,
+        )
+        overlay_cover_titles_check.grid(
+            row=11, column=1, sticky="w", padx=10, pady=10
+        )
         
         preview_card = ctk.CTkFrame(content)
         preview_card.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
@@ -2122,6 +2133,7 @@ class JellyDiscApp(_BaseClass):
         dvd_capacity_mb = 7900 if "DVD-9" in self.disc_size_var.get() else 4100
         selected_menu_style = self.style_var.get()
         include_trivia_preview = self.trivia_var.get()
+        overlay_cover_titles = self.overlay_cover_titles_var.get()
         preview_dir = self.current_staging_dir / "preview"
         preview_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2219,6 +2231,7 @@ class JellyDiscApp(_BaseClass):
                     writers=getattr(series, "writers", []),
                     dvd_capacity_mb=dvd_capacity_mb,
                     preview_path=cover_png,
+                    overlay_front_titles=overlay_cover_titles,
                 )
                 advance_preview("Rendered case cover")
                 art_gen.generate_episode_folio(
@@ -3156,6 +3169,7 @@ class JellyDiscApp(_BaseClass):
             ),
             "iso_path": self.iso_path_var.get(),
             "generate_cover": self.cover_art_var.get(),
+            "overlay_cover_titles": self.overlay_cover_titles_var.get(),
             "generate_folio": self.folio_var.get(),
             "generate_labels": self.disc_label_var.get(),
             "drive": self.drive_var.get(),
@@ -3846,7 +3860,8 @@ class JellyDiscApp(_BaseClass):
                         actors=getattr(self.selected_series, "actors", []),
                         directors=getattr(self.selected_series, "directors", []),
                         writers=getattr(self.selected_series, "writers", []),
-                        dvd_capacity_mb=dvd_capacity_mb
+                        dvd_capacity_mb=dvd_capacity_mb,
+                        overlay_front_titles=settings["overlay_cover_titles"],
                     )
                     self._log(f"✓ DVD Cover PDF saved to: {cover_pdf_path}")
                     
