@@ -4062,7 +4062,7 @@ def run_cli(args):
         else:
             print("Detected Optical Drives:")
             for d in drives:
-                print(f"  - {d.name} ({d.device_path})")
+                print(f"  - {d.device_name} ({d.device_path})")
         return
 
     # 2. Handle erase
@@ -4073,7 +4073,7 @@ def run_cli(args):
             drives = burner.detect_drives()
             if drives:
                 drive = drives[0].device_path
-                print(f"No drive specified. Defaulting to first detected drive: {drives[0].name} ({drive})")
+                print(f"No drive specified. Defaulting to first detected drive: {drives[0].device_name} ({drive})")
             else:
                 print("❌ No optical drives detected.")
                 sys.exit(1)
@@ -4333,7 +4333,7 @@ def run_cli(args):
                 else:
                     print("\nDetected optical drives:")
                     for idx, d in enumerate(drives):
-                        print(f"  [{idx + 1}] {d.name} ({d.device_path})")
+                        print(f"  [{idx + 1}] {d.device_name} ({d.device_path})")
                     while True:
                         drive_choice = input(f"Select a drive number [1-{len(drives)}]: ").strip()
                         try:
